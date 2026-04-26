@@ -1,6 +1,5 @@
 import os
 import random
-import torch
 from fastapi import FastAPI
 from pydantic import BaseModel
 

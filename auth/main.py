@@ -2,13 +2,12 @@ from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel
 import pyotp
 import jwt
-from passlib.context import CryptContext
+import hashlib
 from datetime import datetime, timedelta
 import uuid
 
 app = FastAPI(title="NEXUS Auth Service")
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 SECRET_KEY = "nexus_super_secret_key_change_in_prod"
 ALGORITHM = "HS256"
 
@@ -29,7 +28,7 @@ async def register(user: UserCreate):
     if user.email in mock_users_db:
         raise HTTPException(status_code=400, detail="Email already registered")
     
-    hashed_password = pwd_context.hash(user.password)
+    hashed_password = hashlib.sha256(user.password.encode()).hexdigest()
     user_id = str(uuid.uuid4())
     mock_users_db[user.email] = {
         "id": user_id,
@@ -53,7 +52,8 @@ async def enable_totp(email: str):
 @app.post("/login")
 async def login(user_login: UserLogin):
     user = mock_users_db.get(user_login.email)
-    if not user or not pwd_context.verify(user_login.password, user["password"]):
+    hashed_input = hashlib.sha256(user_login.password.encode()).hexdigest()
+    if not user or hashed_input != user["password"]:
         raise HTTPException(status_code=401, detail="Invalid credentials")
     
     if user["totp_secret"]:

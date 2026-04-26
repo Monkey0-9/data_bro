@@ -1,0 +1,7 @@
+load("@rules_proto//proto:defs.bzl", "proto_library")
+
+proto_library(
+    name = "market_data_proto",
+    srcs = ["market_data.proto"],
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,16 @@
+[package]
+name = "nexus-ingest"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+prost = "0.12"
+prost-types = "0.12"
+bytes = "1"
+# Mocks or stubs for aeron and sbe in this thin slice
+# aeron-rs = "0.1"
+# sbe-rs = "0.1"
+
+[build-dependencies]
+prost-build = "0.12"

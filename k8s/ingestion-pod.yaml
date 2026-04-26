@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nexus-ingestion-pod
+  labels:
+    app: nexus-ingestion
+spec:
+  containers:
+  - name: rust-ingest
+    image: nexus-rust-ingest:latest
+    volumeMounts:
+    - name: aeron-shm
+      mountPath: /dev/shm
+  - name: flink-taskmanager
+    image: nexus-flink:latest
+    volumeMounts:
+    - name: aeron-shm
+      mountPath: /dev/shm
+  volumes:
+  - name: aeron-shm
+    emptyDir:
+      medium: Memory

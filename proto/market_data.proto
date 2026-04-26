@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package nexus.market_data;
+
+option java_package = "com.nexus.stream.proto";
+option java_outer_classname = "MarketDataProto";
+
+enum EventType {
+  UNKNOWN = 0;
+  TRADE = 1;
+  QUOTE = 2;
+}
+
+message MarketEvent {
+  string symbol = 1;
+  uint64 exchange_timestamp = 2;
+  uint64 ingestion_timestamp = 3;
+  EventType event_type = 4;
+  double price = 5;
+  int32 quantity = 6;
+}

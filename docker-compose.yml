@@ -69,6 +69,23 @@ services:
     depends_on:
       - cockroachdb
 
+  signal-engine:
+    build:
+      context: ./signal
+    ports:
+      - "8001:8001"
+    depends_on:
+      - timescaledb
+
+  ui:
+    image: node:20-alpine
+    working_dir: /app
+    volumes:
+      - ./ui:/app
+    ports:
+      - "5173:5173"
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+
 volumes:
   questdb_data:
   timescaledb_data:

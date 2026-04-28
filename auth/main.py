@@ -10,6 +10,12 @@ import jwt
 import pyotp
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from opentelemetry import trace
+from opentelemetry.exporter.prometheus import PrometheusMetricReader
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.resources import Resource, SERVICE_NAME
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
 from passlib.context import CryptContext
 from pydantic import BaseModel, EmailStr, Field
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -32,14 +38,33 @@ logging.basicConfig(
 )
 logger = logging.getLogger("auth")
 
+# --- OpenTelemetry ---
+resource = Resource.create({SERVICE_NAME: "nexus-auth"})
+trace_provider = TracerProvider(resource=resource)
+trace_provider.add_span_processor(BatchSpanProcessor(ConsoleSpanExporter()))
+trace.set_tracer_provider(trace_provider)
+tracer = trace.get_tracer("auth.tracer")
+
+reader = PrometheusMetricReader()
+meter_provider = MeterProvider(resource=resource, metric_readers=[reader])
+
 limiter = Limiter(key_func=get_remote_address)
 request_times: list[float] = []
+
+# --- Global DB pool ---
+db_pool: asyncpg.Pool | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global db_pool
     logger.info("Auth service starting up")
+    if DB_DSN:
+        db_pool = await asyncpg.create_pool(dsn=DB_DSN, min_size=2, max_size=10)
+        logger.info("DB pool created")
     yield
+    if db_pool:
+        await db_pool.close()
     logger.info("Auth service shutting down")
 
 
@@ -53,7 +78,7 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),
+    allow_origins=os.environ.get("CORS_ORIGINS", "http://localhost:80").split(","),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -84,12 +109,12 @@ async def log_requests(request, call_next):
 
 
 async def get_db() -> asyncpg.Connection:
-    if not DB_DSN:
+    if not db_pool:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database not configured",
+            detail="Database pool not available",
         )
-    return await asyncpg.connect(dsn=DB_DSN)
+    return await db_pool.acquire()
 
 
 @app.post("/register", status_code=status.HTTP_201_CREATED)
@@ -114,7 +139,7 @@ async def register(user: UserCreate):
         logger.info("User registered: %s", user.email)
         return {"message": "User registered successfully", "id": str(user_id)}
     finally:
-        await conn.close()
+        await db_pool.release(conn)
 
 
 @app.post("/totp/enable")
@@ -139,7 +164,7 @@ async def enable_totp(email: EmailStr):
         )
         return {"secret": secret, "uri": totp_uri}
     finally:
-        await conn.close()
+        await db_pool.release(conn)
 
 
 @app.post("/login")
@@ -167,7 +192,7 @@ async def login(user_login: UserLogin):
         logger.info("User logged in: %s", user_login.email)
         return {"access_token": token, "token_type": "bearer"}
     finally:
-        await conn.close()
+        await db_pool.release(conn)
 
 
 @app.get("/health")
@@ -175,7 +200,7 @@ async def health_check():
     try:
         conn = await get_db()
         await conn.execute("SELECT 1")
-        await conn.close()
+        await db_pool.release(conn)
         return {"status": "healthy", "database": "connected"}
     except Exception as exc:
         raise HTTPException(

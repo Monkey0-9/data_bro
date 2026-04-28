@@ -8,9 +8,13 @@ tokio = { version = "1", features = ["full"] }
 prost = "0.12"
 prost-types = "0.12"
 bytes = "1"
-# Mocks or stubs for aeron and sbe in this thin slice
-# aeron-rs = "0.1"
-# sbe-rs = "0.1"
+csv = "1.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-opentelemetry = "0.22"
+opentelemetry = "0.21"
+opentelemetry-jaeger = "0.20"
+backoff = { version = "0.4", features = ["tokio"] }
 
 [build-dependencies]
 prost-build = "0.12"

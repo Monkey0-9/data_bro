@@ -1,11 +1,19 @@
 import logging
+import os
 import time
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
+import redis.asyncio as redis
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from opentelemetry import trace
+from opentelemetry.exporter.prometheus import PrometheusMetricReader
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.resources import Resource, SERVICE_NAME
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
 from pydantic import BaseModel, Field
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -14,6 +22,8 @@ from slowapi.util import get_remote_address
 from indicators import momentum_signal, push_price
 from sentiment import score as sentiment_score
 
+REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+
 # --- Logging ---
 logging.basicConfig(
     level=logging.INFO,
@@ -21,17 +31,32 @@ logging.basicConfig(
 )
 logger = logging.getLogger("signal")
 
+# --- OpenTelemetry ---
+resource = Resource.create({SERVICE_NAME: "nexus-signal"})
+trace_provider = TracerProvider(resource=resource)
+trace_provider.add_span_processor(BatchSpanProcessor(ConsoleSpanExporter()))
+trace.set_tracer_provider(trace_provider)
+tracer = trace.get_tracer("signal.tracer")
+
+reader = PrometheusMetricReader()
+meter_provider = MeterProvider(resource=resource, metric_readers=[reader])
+
 # --- Rate Limiting ---
 limiter = Limiter(key_func=get_remote_address)
 
 # --- WebSocket State ---
 ws_clients: set[WebSocket] = set()
+redis_client: redis.Redis | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global redis_client
     logger.info("Signal engine starting up")
+    redis_client = redis.from_url(REDIS_URL)
     yield
+    if redis_client:
+        await redis_client.close()
     logger.info("Signal engine shutting down")
 
 
@@ -45,7 +70,7 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),
+    allow_origins=os.environ.get("CORS_ORIGINS", "http://localhost:80").split(","),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -112,7 +137,12 @@ async def predict_signal(state: MarketState):
         "suggested_action": action,
     }
 
-    # Broadcast to WebSocket clients
+    # Publish to Redis pubsub for multi-instance broadcasting
+    if redis_client:
+        import json
+        await redis_client.publish("signals", json.dumps(result))
+
+    # Also broadcast to local WebSocket clients
     for ws in list(ws_clients):
         try:
             await ws.send_json(result)
@@ -127,16 +157,46 @@ async def websocket_signals(websocket: WebSocket):
     await websocket.accept()
     ws_clients.add(websocket)
     logger.info("WebSocket client connected: %s", websocket.client)
+
+    # Subscribe to Redis pubsub if available
+    pubsub = None
+    if redis_client:
+        pubsub = redis_client.pubsub()
+        await pubsub.subscribe("signals")
+
     try:
+        # Listen for both client messages and Redis pubsub
+        import asyncio
+        import json
+
         while True:
-            # Keep connection alive; client can ping if needed
-            data = await websocket.receive_text()
-            if data == "ping":
-                await websocket.send_text("pong")
+            if pubsub:
+                # Wait for Redis message with timeout
+                try:
+                    message = await asyncio.wait_for(pubsub.get_message(timeout=1.0))
+                    if message and message["type"] == "message":
+                        data = json.loads(message["data"])
+                        await websocket.send_json(data)
+                except asyncio.TimeoutError:
+                    # Check for client ping
+                    try:
+                        data = await asyncio.wait_for(websocket.receive_text(), timeout=0.1)
+                        if data == "ping":
+                            await websocket.send_text("pong")
+                    except asyncio.TimeoutError:
+                        continue
+            else:
+                # Fallback: client ping/pong only
+                data = await websocket.receive_text()
+                if data == "ping":
+                    await websocket.send_text("pong")
     except WebSocketDisconnect:
         logger.info("WebSocket client disconnected")
     finally:
         ws_clients.discard(websocket)
+        if pubsub:
+            await pubsub.unsubscribe("signals")
+            await pubsub.close()
 
 
 @app.get("/health")

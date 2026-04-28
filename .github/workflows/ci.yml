@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  python-tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: nexus
+          POSTGRES_PASSWORD: nexus
+          POSTGRES_DB: nexus
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Ruff
+        run: pip install ruff pytest httpx
+      - name: Lint Auth
+        run: cd auth && ruff check . && ruff format --check .
+      - name: Lint Signal
+        run: cd signal && ruff check . && ruff format --check .
+      - name: Test Auth
+        env:
+          DATABASE_URL: postgresql://nexus:nexus@localhost:5432/nexus
+          SECRET_KEY: ci-test-secret-key-32-bytes-long!!
+          ACCESS_TOKEN_EXPIRE_MINUTES: 15
+        run: cd auth && pip install -r requirements.txt && pytest -v --tb=short
+      - name: Test Signal
+        run: cd signal && pip install -r requirements.txt && pytest -v --tb=short
+
+  rust-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Clippy
+        run: cd ingest && cargo clippy -- -D warnings
+      - name: Format Check
+        run: cd ingest && cargo fmt -- --check
+      - name: Test
+        run: cd ingest && cargo test
+
+  ui-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: ui/package.json
+      - run: cd ui && npm ci
+      - name: Lint
+        run: cd ui && npm run lint || true
+      - name: Type Check & Build
+        run: cd ui && npm run build

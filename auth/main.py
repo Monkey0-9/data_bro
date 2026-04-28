@@ -1,75 +1,193 @@
-from fastapi import FastAPI, HTTPException, Depends
-from pydantic import BaseModel
-import pyotp
-import jwt
-import hashlib
-from datetime import datetime, timedelta
+import logging
+import os
+import time
 import uuid
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 
-app = FastAPI(title="NEXUS Auth Service")
+import asyncpg
+import jwt
+import pyotp
+from fastapi import FastAPI, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
+from passlib.context import CryptContext
+from pydantic import BaseModel, EmailStr, Field
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
-SECRET_KEY = "nexus_super_secret_key_change_in_prod"
+DB_DSN = os.environ.get("DATABASE_URL")
+SECRET_KEY = os.environ.get("SECRET_KEY")
 ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "15"))
 
-# Mock DB for phase 2 initial implementation
-mock_users_db = {}
+if not SECRET_KEY:
+    raise RuntimeError("SECRET_KEY environment variable is required")
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+logger = logging.getLogger("auth")
+
+limiter = Limiter(key_func=get_remote_address)
+request_times: list[float] = []
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("Auth service starting up")
+    yield
+    logger.info("Auth service shutting down")
+
+
+app = FastAPI(
+    title="NEXUS Auth Service",
+    description="Authentication and authorization service with TOTP 2FA.",
+    version="0.1.0",
+    lifespan=lifespan,
+)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 class UserCreate(BaseModel):
-    email: str
-    password: str
+    email: EmailStr
+    password: str = Field(..., min_length=8)
+
 
 class UserLogin(BaseModel):
-    email: str
+    email: EmailStr
     password: str
     totp_code: str | None = None
 
-@app.post("/register")
+
+@app.middleware("http")
+async def log_requests(request, call_next):
+    start = time.time()
+    response = await call_next(request)
+    elapsed = time.time() - start
+    request_times.append(elapsed)
+    if len(request_times) > 1000:
+        request_times.pop(0)
+    logger.info("%s %s - %d - %.3fs", request.method, request.url.path, response.status_code, elapsed)
+    return response
+
+
+async def get_db() -> asyncpg.Connection:
+    if not DB_DSN:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database not configured",
+        )
+    return await asyncpg.connect(dsn=DB_DSN)
+
+
+@app.post("/register", status_code=status.HTTP_201_CREATED)
+@limiter.limit("10/minute")
 async def register(user: UserCreate):
-    if user.email in mock_users_db:
-        raise HTTPException(status_code=400, detail="Email already registered")
-    
-    hashed_password = hashlib.sha256(user.password.encode()).hexdigest()
-    user_id = str(uuid.uuid4())
-    mock_users_db[user.email] = {
-        "id": user_id,
-        "password": hashed_password,
-        "totp_secret": None
-    }
-    return {"message": "User registered successfully", "id": user_id}
+    conn = await get_db()
+    try:
+        existing = await conn.fetchval(
+            "SELECT id FROM users WHERE email = $1", user.email
+        )
+        if existing:
+            raise HTTPException(status_code=400, detail="Email already registered")
+
+        user_id = uuid.uuid4()
+        hashed = pwd_context.hash(user.password)
+        await conn.execute(
+            "INSERT INTO users (id, email, password_hash) VALUES ($1, $2, $3)",
+            user_id,
+            user.email,
+            hashed,
+        )
+        logger.info("User registered: %s", user.email)
+        return {"message": "User registered successfully", "id": str(user_id)}
+    finally:
+        await conn.close()
+
 
 @app.post("/totp/enable")
-async def enable_totp(email: str):
-    user = mock_users_db.get(email)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    secret = pyotp.random_base32()
-    user["totp_secret"] = secret
-    
-    totp_uri = pyotp.totp.TOTP(secret).provisioning_uri(name=email, issuer_name="NEXUS")
-    return {"secret": secret, "uri": totp_uri}
+@limiter.limit("10/minute")
+async def enable_totp(email: EmailStr):
+    conn = await get_db()
+    try:
+        row = await conn.fetchrow(
+            "SELECT id FROM users WHERE email = $1", email
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        secret = pyotp.random_base32()
+        await conn.execute(
+            "UPDATE users SET totp_secret = $1 WHERE email = $2",
+            secret,
+            email,
+        )
+        totp_uri = pyotp.totp.TOTP(secret).provisioning_uri(
+            name=email, issuer_name="NEXUS"
+        )
+        return {"secret": secret, "uri": totp_uri}
+    finally:
+        await conn.close()
+
 
 @app.post("/login")
+@limiter.limit("20/minute")
 async def login(user_login: UserLogin):
-    user = mock_users_db.get(user_login.email)
-    hashed_input = hashlib.sha256(user_login.password.encode()).hexdigest()
-    if not user or hashed_input != user["password"]:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-    
-    if user["totp_secret"]:
-        if not user_login.totp_code:
-            raise HTTPException(status_code=401, detail="TOTP code required")
-        totp = pyotp.TOTP(user["totp_secret"])
-        if not totp.verify(user_login.totp_code):
-            raise HTTPException(status_code=401, detail="Invalid TOTP code")
-            
-    # Generate JWT
-    expire = datetime.utcnow() + timedelta(minutes=15)
-    to_encode = {"sub": user["id"], "exp": expire}
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    
-    return {"access_token": encoded_jwt, "token_type": "bearer"}
+    conn = await get_db()
+    try:
+        row = await conn.fetchrow(
+            "SELECT id, password_hash, totp_secret FROM users WHERE email = $1",
+            user_login.email,
+        )
+        if not row or not pwd_context.verify(user_login.password, row["password_hash"]):
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+
+        if row["totp_secret"]:
+            if not user_login.totp_code:
+                raise HTTPException(status_code=401, detail="TOTP code required")
+            totp = pyotp.TOTP(row["totp_secret"])
+            if not totp.verify(user_login.totp_code, valid_window=1):
+                raise HTTPException(status_code=401, detail="Invalid TOTP code")
+
+        expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        payload = {"sub": str(row["id"]), "exp": expire}
+        token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+        logger.info("User logged in: %s", user_login.email)
+        return {"access_token": token, "token_type": "bearer"}
+    finally:
+        await conn.close()
+
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy"}
+    try:
+        conn = await get_db()
+        await conn.execute("SELECT 1")
+        await conn.close()
+        return {"status": "healthy", "database": "connected"}
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Database unavailable: {exc}",
+        )
+
+
+@app.get("/metrics")
+async def metrics():
+    avg_latency = sum(request_times[-100:]) / max(len(request_times[-100:]), 1)
+    return {
+        "total_requests": len(request_times),
+        "avg_latency_ms": round(avg_latency * 1000, 2),
+    }

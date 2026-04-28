@@ -1,49 +1,159 @@
-import os
-import random
-from fastapi import FastAPI
-from pydantic import BaseModel
+import logging
+import time
+from collections import defaultdict
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
-# Mock loading models (since we don't have real weights here)
-print("Loading FinBERT sentiment model...")
-# from transformers import AutoModelForSequenceClassification, AutoTokenizer
-# tokenizer = AutoTokenizer.from_pretrained("ProsusAI/finbert")
-# model = AutoModelForSequenceClassification.from_pretrained("ProsusAI/finbert")
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
-print("Loading RLlib Momentum Strategy...")
-# from ray.rllib.algorithms.ppo import PPO
-# rl_model = PPO.from_checkpoint("/path/to/checkpoint")
+from indicators import momentum_signal, push_price
+from sentiment import score as sentiment_score
 
-app = FastAPI(title="NEXUS Signal Engine")
+# --- Logging ---
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+logger = logging.getLogger("signal")
+
+# --- Rate Limiting ---
+limiter = Limiter(key_func=get_remote_address)
+
+# --- WebSocket State ---
+ws_clients: set[WebSocket] = set()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("Signal engine starting up")
+    yield
+    logger.info("Signal engine shutting down")
+
+
+app = FastAPI(
+    title="NEXUS Signal Engine",
+    description="Real-time market signal engine with deterministic sentiment analysis and momentum indicators.",
+    version="0.1.0",
+    lifespan=lifespan,
+)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 class MarketState(BaseModel):
+    symbol: str = Field(..., pattern=r"^[A-Z0-9]{1,10}$")
+    price: float = Field(..., gt=0)
+    volume: int = Field(..., gt=0)
+    news_headline: str | None = Field(default=None, max_length=500)
+
+
+class SignalResponse(BaseModel):
     symbol: str
+    timestamp: str
     price: float
     volume: int
-    news_headline: str | None = None
+    sentiment_score: float
+    momentum_signal: str
+    confidence: float
+    suggested_action: str
 
-@app.post("/signal/predict")
+
+# --- Request metrics ---
+request_times: list[float] = []
+
+
+@app.middleware("http")
+async def log_requests(request, call_next):
+    start = time.time()
+    response = await call_next(request)
+    elapsed = time.time() - start
+    request_times.append(elapsed)
+    if len(request_times) > 1000:
+        request_times.pop(0)
+    logger.info("%s %s - %d - %.3fs", request.method, request.url.path, response.status_code, elapsed)
+    return response
+
+
+@app.post("/signal/predict", response_model=SignalResponse)
+@limiter.limit("60/minute")
 async def predict_signal(state: MarketState):
-    # Mock FinBERT prediction
-    sentiment_score = 0.0
-    if state.news_headline:
-        # In reality: inputs = tokenizer(state.news_headline, return_tensors="pt")
-        # outputs = model(**inputs)
-        sentiment_score = random.uniform(-1.0, 1.0) # Mock score
+    push_price(state.symbol, state.price)
 
-    # Mock RL prediction
-    # In reality: action = rl_model.compute_single_action(state_vector)
-    rl_momentum_signal = random.choice(["BUY", "SELL", "HOLD"])
-    confidence = random.uniform(0.5, 0.99)
+    sentiment = sentiment_score(state.news_headline)
+    signal, confidence = momentum_signal(state.symbol)
 
-    return {
+    if signal == "BUY" and sentiment > 0.2:
+        action = "ENTER_LONG"
+    elif signal == "SELL" and sentiment < -0.2:
+        action = "ENTER_SHORT"
+    else:
+        action = "HOLD"
+
+    result = {
         "symbol": state.symbol,
-        "timestamp": "2026-04-26T00:00:00Z",
-        "sentiment_score": round(sentiment_score, 4),
-        "rl_signal": rl_momentum_signal,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "price": state.price,
+        "volume": state.volume,
+        "sentiment_score": round(sentiment, 4),
+        "momentum_signal": signal,
         "confidence": round(confidence, 4),
-        "suggested_action": "ENTER_LONG" if rl_momentum_signal == "BUY" and sentiment_score > 0.2 else "HOLD"
+        "suggested_action": action,
     }
+
+    # Broadcast to WebSocket clients
+    for ws in list(ws_clients):
+        try:
+            await ws.send_json(result)
+        except Exception:
+            ws_clients.discard(ws)
+
+    return result
+
+
+@app.websocket("/ws/signals")
+async def websocket_signals(websocket: WebSocket):
+    await websocket.accept()
+    ws_clients.add(websocket)
+    logger.info("WebSocket client connected: %s", websocket.client)
+    try:
+        while True:
+            # Keep connection alive; client can ping if needed
+            data = await websocket.receive_text()
+            if data == "ping":
+                await websocket.send_text("pong")
+    except WebSocketDisconnect:
+        logger.info("WebSocket client disconnected")
+    finally:
+        ws_clients.discard(websocket)
+
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    avg_latency = sum(request_times[-100:]) / max(len(request_times[-100:]), 1)
+    return {
+        "status": "ok",
+        "uptime": "running",
+        "avg_request_latency_ms": round(avg_latency * 1000, 2),
+        "active_websocket_clients": len(ws_clients),
+    }
+
+
+@app.get("/metrics")
+async def metrics():
+    return {
+        "total_requests": len(request_times),
+        "avg_latency_ms": round((sum(request_times) / max(len(request_times), 1)) * 1000, 2),
+        "active_ws_clients": len(ws_clients),
+    }

@@ -1,96 +1,185 @@
-version: '3.8'
 services:
   questdb:
     image: questdb/questdb:8.0.0
     ports:
       - "9000:9000"
-      - "9009:9009" # ILP
-      - "8812:8812" # PostgreSQL
-      - "9003:9003" # Min health server
+      - "9009:9009"
+      - "8812:8812"
     environment:
       - QDB_CAIRO_COMMIT_MODE=async
     volumes:
       - questdb_data:/root/.questdb
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9000"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+    networks:
+      - nexus
 
-  rust-ingest:
-    build:
-      context: ./ingest
-    depends_on:
-      - questdb
-    volumes:
-      - aeron_shm:/dev/shm
-
-  flink-jobmanager:
-    image: flink:1.20
+  redis:
+    image: redis:7-alpine
     ports:
-      - "8081:8081"
-    command: jobmanager
-    environment:
-      - |
-        FLINK_PROPERTIES=
-        jobmanager.rpc.address: flink-jobmanager
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - nexus
 
-  flink-taskmanager:
-    image: flink:1.20
-    depends_on:
-      - flink-jobmanager
-    command: taskmanager
-    volumes:
-      - aeron_shm:/dev/shm
-    environment:
-      - |
-        FLINK_PROPERTIES=
-        jobmanager.rpc.address: flink-jobmanager
-        taskmanager.numberOfTaskSlots: 2
-
-  timescaledb:
-    image: timescale/timescaledb:latest-pg14
+  postgres:
+    image: postgres:16-alpine
     ports:
       - "5432:5432"
     environment:
-      - POSTGRES_PASSWORD=nexus
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     volumes:
-      - timescaledb_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    networks:
+      - nexus
 
-  cockroachdb:
-    image: cockroachdb/cockroach:v23.1.5
-    command: start-single-node --insecure
-    ports:
-      - "26257:26257"
-      - "8080:8080"
+  ingest:
+    build:
+      context: ./ingest
+    depends_on:
+      questdb:
+        condition: service_healthy
+    environment:
+      - QUESTDB_HOST=questdb
+      - QUESTDB_ILP_PORT=9009
+      - TICKS_CSV=/app/data/ticks.csv
+      - RUST_LOG=info
     volumes:
-      - cockroachdb_data:/cockroach/cockroach-data
+      - ./data/ticks.csv:/app/data/ticks.csv:ro
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    networks:
+      - nexus
 
-  auth-service:
+  auth:
     build:
       context: ./auth
     ports:
       - "8000:8000"
     depends_on:
-      - cockroachdb
+      postgres:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - SECRET_KEY=${SECRET_KEY}
+      - ACCESS_TOKEN_EXPIRE_MINUTES=15
+      - CORS_ORIGINS=http://localhost:80
+      - REDIS_URL=redis://redis:6379/0
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    networks:
+      - nexus
 
-  signal-engine:
+  signal:
     build:
       context: ./signal
     ports:
       - "8001:8001"
     depends_on:
-      - timescaledb
+      questdb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - QUESTDB_HOST=questdb
+      - QUESTDB_PG_PORT=8812
+      - REDIS_URL=redis://redis:6379/0
+      - CORS_ORIGINS=http://localhost:80
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    networks:
+      - nexus
 
   ui:
-    image: node:20-alpine
-    working_dir: /app
-    volumes:
-      - ./ui:/app
+    build:
+      context: ./ui
+      dockerfile: Dockerfile.prod
+    depends_on:
+      - auth
+      - signal
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:80"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+    networks:
+      - nexus
+
+  nginx:
+    image: nginx:alpine
     ports:
-      - "5173:5173"
-    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      auth:
+        condition: service_healthy
+      signal:
+        condition: service_healthy
+      ui:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+    networks:
+      - nexus
 
 volumes:
   questdb_data:
-  timescaledb_data:
-  cockroachdb_data:
-  aeron_shm:
-    driver_opts:
-      type: tmpfs
-      device: tmpfs
+  postgres_data:
+
+networks:
+  nexus:
+    driver: bridge

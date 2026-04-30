@@ -2,7 +2,6 @@ pub mod market_data {
     include!(concat!(env!("OUT_DIR"), "/nexus.market_data.rs"));
 }
 
-use backoff::ExponentialBackoff;
 use csv::ReaderBuilder;
 use market_data::{EventType, MarketEvent};
 use prost::Message;
@@ -13,6 +12,7 @@ use tokio::net::TcpStream;
 use tokio::signal;
 use tokio::time::{interval, Duration};
 use tracing::{error, info, warn};
+use backoff::ExponentialBackoff;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 #[derive(Debug, Clone)]
@@ -37,9 +37,9 @@ fn load_ticks(path: &str) -> Vec<Tick> {
     ticks
 }
 
-async fn send_ilp(stream: &mut TcpStream, table: &str, symbol: &str, price: f64, qty: i32, ts: u64) {
+async fn send_ilp(stream: &mut TcpStream, table: &str, symbol: &str, price: f64, qty: i32, ts: u64) -> std::io::Result<()> {
     let line = format!("{} symbol={},price={},quantity={} {}\n", table, symbol, price, qty, ts);
-    let _ = stream.write_all(line.as_bytes()).await;
+    stream.write_all(line.as_bytes()).await
 }
 
 #[tokio::main]
@@ -101,18 +101,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     quantity: tick.quantity,
                 };
 
-                // Connect to QuestDB with backoff if not connected
+                // Connect to QuestDB with exponential backoff if not connected
                 if stream.is_none() {
-                    let backoff = ExponentialBackoff::default();
-                    match TcpStream::connect((quest_host.as_str(), quest_port)).await {
-                        Ok(s) => {
-                            info!("Connected to QuestDB ILP at {}:{}", quest_host, quest_port);
-                            stream = Some(s);
-                        }
-                        Err(e) => {
-                            warn!("QuestDB unavailable ({}:{}) - {}. Retrying with backoff.", quest_host, quest_port, e);
-                            tokio::time::sleep(Duration::from_secs(1)).await;
-                            continue;
+                    let mut backoff = ExponentialBackoff::default();
+                    let mut attempt = 0;
+                    loop {
+                        match TcpStream::connect((quest_host.as_str(), quest_port)).await {
+                            Ok(s) => {
+                                info!("Connected to QuestDB ILP at {}:{}", quest_host, quest_port);
+                                stream = Some(s);
+                                break;
+                            }
+                            Err(e) => {
+                                attempt += 1;
+                                let delay = backoff.next_backoff().unwrap_or(Duration::from_secs(60));
+                                warn!("QuestDB unavailable ({}:{}) - {}. Retry {} in {:?}", quest_host, quest_port, e, attempt, delay);
+                                tokio::time::sleep(delay).await;
+                            }
                         }
                     }
                 }

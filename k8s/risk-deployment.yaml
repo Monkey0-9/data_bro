@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: risk
+  namespace: nexus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: risk
+  template:
+    metadata:
+      labels:
+        app: risk
+    spec:
+      containers:
+        - name: risk
+          image: nexus-risk:latest
+          ports:
+            - containerPort: 8002
+          env:
+            - name: QUESTDB_HOST
+              value: "questdb"
+            - name: QUESTDB_PG_PORT
+              value: "8812"
+          resources:
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8002
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8002
+            initialDelaySeconds: 5
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: risk
+  namespace: nexus
+spec:
+  selector:
+    app: risk
+  ports:
+    - port: 8002
+      targetPort: 8002
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: risk-pdb
+  namespace: nexus
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: risk

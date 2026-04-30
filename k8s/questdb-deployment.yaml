@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: questdb
+  namespace: nexus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: questdb
+  template:
+    metadata:
+      labels:
+        app: questdb
+    spec:
+      containers:
+        - name: questdb
+          image: questdb/questdb:8.0.0
+          ports:
+            - containerPort: 9000
+            - containerPort: 9009
+            - containerPort: 8812
+          env:
+            - name: QDB_CAIRO_COMMIT_MODE
+              value: "async"
+          resources:
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
+            requests:
+              memory: "1Gi"
+              cpu: "500m"
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 9000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 9000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          volumeMounts:
+            - name: questdb-data
+              mountPath: /root/.questdb
+      volumes:
+        - name: questdb-data
+          persistentVolumeClaim:
+            claimName: questdb-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: questdb
+  namespace: nexus
+spec:
+  selector:
+    app: questdb
+  ports:
+    - name: http
+      port: 9000
+      targetPort: 9000
+    - name: ilp
+      port: 9009
+      targetPort: 9009
+    - name: pg
+      port: 8812
+      targetPort: 8812

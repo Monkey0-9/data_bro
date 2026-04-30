@@ -16,11 +16,12 @@ export function SignalPanel() {
     padding: '24px',
     boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.3)',
     width: '320px',
+    maxWidth: 'calc(100vw - 60px)',
     display: 'flex',
     flexDirection: 'column',
     gap: '16px',
     color: 'white',
-    fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
+    fontFamily: '"Inter", -apple-system, BlinkMacSystemFont, sans-serif',
   };
 
   const headerStyle: React.CSSProperties = {

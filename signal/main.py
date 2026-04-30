@@ -114,10 +114,10 @@ async def log_requests(request, call_next):
 @app.post("/signal/predict", response_model=SignalResponse)
 @limiter.limit("60/minute")
 async def predict_signal(state: MarketState):
-    push_price(state.symbol, state.price)
+    await push_price(state.symbol, state.price)
 
     sentiment = sentiment_score(state.news_headline)
-    signal, confidence = momentum_signal(state.symbol)
+    signal, confidence = await momentum_signal(state.symbol)
 
     if signal == "BUY" and sentiment > 0.2:
         action = "ENTER_LONG"

@@ -30,5 +30,17 @@
             <artifactId>questdb</artifactId>
             <version>8.0.0</version>
         </dependency>
+        <!-- Aeron for zero-copy messaging -->
+        <dependency>
+            <groupId>io.aeron</groupId>
+            <artifactId>aeron-all</artifactId>
+            <version>1.44.0</version>
+        </dependency>
+        <!-- Agrona for buffer management -->
+        <dependency>
+            <groupId>org.agrona</groupId>
+            <artifactId>agrona</artifactId>
+            <version>1.21.0</version>
+        </dependency>
     </dependencies>
 </project>

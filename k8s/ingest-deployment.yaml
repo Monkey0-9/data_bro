@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ingest
+  namespace: nexus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ingest
+  template:
+    metadata:
+      labels:
+        app: ingest
+    spec:
+      containers:
+        - name: ingest
+          image: nexus-ingest:latest
+          env:
+            - name: QUESTDB_HOST
+              value: "questdb"
+            - name: QUESTDB_ILP_PORT
+              value: "9009"
+            - name: TICKS_CSV
+              value: "/app/data/ticks.csv"
+            - name: RUST_LOG
+              value: "info"
+          resources:
+            limits:
+              memory: "256Mi"
+              cpu: "250m"
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+          volumeMounts:
+            - name: ticks-data
+              mountPath: /app/data
+      volumes:
+        - name: ticks-data
+          configMap:
+            name: ticks-csv
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ingest
+  namespace: nexus
+spec:
+  selector:
+    app: ingest
+  ports:
+    - port: 9009
+      targetPort: 9009

@@ -120,6 +120,8 @@ services:
     environment:
       - QUESTDB_HOST=questdb
       - QUESTDB_PG_PORT=8812
+      - QUESTDB_USER=admin
+      - QUESTDB_PASSWORD=${QUESTDB_PASSWORD}
       - REDIS_URL=redis://redis:6379/0
       - CORS_ORIGINS=http://localhost:80
     healthcheck:
@@ -132,6 +134,60 @@ services:
       resources:
         limits:
           memory: 512M
+    networks:
+      - nexus
+
+  backtest:
+    build:
+      context: ./backtest
+    ports:
+      - "8003:8003"
+    depends_on:
+      questdb:
+        condition: service_healthy
+    environment:
+      - QUESTDB_HOST=questdb
+      - QUESTDB_PG_PORT=8812
+      - QUESTDB_USER=admin
+      - QUESTDB_PASSWORD=${QUESTDB_PASSWORD}
+      - CORS_ORIGINS=http://localhost:80
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8003/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    networks:
+      - nexus
+
+  risk:
+    build:
+      context: ./risk
+    ports:
+      - "8002:8002"
+    depends_on:
+      questdb:
+        condition: service_healthy
+    environment:
+      - QUESTDB_HOST=questdb
+      - QUESTDB_PG_PORT=8812
+      - QUESTDB_USER=admin
+      - QUESTDB_PASSWORD=${QUESTDB_PASSWORD}
+      - CORS_ORIGINS=http://localhost:80
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8002/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
     networks:
       - nexus
 
@@ -165,6 +221,10 @@ services:
       auth:
         condition: service_healthy
       signal:
+        condition: service_healthy
+      risk:
+        condition: service_healthy
+      backtest:
         condition: service_healthy
       ui:
         condition: service_healthy

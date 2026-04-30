@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gpu-sentiment
+  namespace: nexus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gpu-sentiment
+  template:
+    metadata:
+      labels:
+        app: gpu-sentiment
+    spec:
+      containers:
+        - name: gpu-sentiment
+          image: nexus-gpu-sentiment:latest
+          ports:
+            - containerPort: 8005
+          resources:
+            limits:
+              nvidia.com/gpu: 1
+              memory: "2Gi"
+              cpu: "1000m"
+            requests:
+              memory: "1Gi"
+              cpu: "500m"
+      nodeSelector:
+        accelerator: nvidia-tesla-k80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gpu-sentiment
+  namespace: nexus
+spec:
+  selector:
+    app: gpu-sentiment
+  ports:
+    - port: 8005
+      targetPort: 8005

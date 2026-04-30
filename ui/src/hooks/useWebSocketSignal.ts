@@ -47,7 +47,7 @@ export function useWebSocketSignal() {
       clearInterval(fallbackInterval);
       ws.close();
     };
-  }, [setSignal, setLoading, setError, signal]);
+  }, [setSignal, setLoading, setError]);
 
   return wsRef;
 }

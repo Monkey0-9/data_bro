@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useAuth } from '../contexts/AuthContext';
 
 interface Position {
   symbol: string;
@@ -14,43 +15,51 @@ interface PortfolioPnLProps {
 }
 
 export const PortfolioPnL: React.FC<PortfolioPnLProps> = ({ initialCapital = 100000 }) => {
+  const { token } = useAuth();
   const [positions, setPositions] = useState<Position[]>([]);
   const [totalPnL, setTotalPnL] = useState(0);
   const [totalPnLPercent, setTotalPnLPercent] = useState(0);
 
   useEffect(() => {
-    // Generate mock portfolio data
-    const generatePortfolio = () => {
-      const symbols = ['AAPL', 'GOOGL', 'MSFT', 'AMZN', 'TSLA'];
-      const newPositions: Position[] = symbols.map((symbol) => {
-        const entryPrice = 150 + Math.random() * 100;
-        const currentPrice = entryPrice * (1 + (Math.random() - 0.5) * 0.1);
-        const quantity = Math.floor(Math.random() * 100) + 10;
-        const pnl = (currentPrice - entryPrice) * quantity;
-        const pnlPercent = ((currentPrice - entryPrice) / entryPrice) * 100;
+    if (!token) return;
 
-        return {
-          symbol,
-          quantity,
-          entryPrice,
-          currentPrice,
-          pnl,
-          pnlPercent,
-        };
-      });
+    const fetchPortfolio = async () => {
+      try {
+        // In production, fetch from portfolio management API
+        // For now, using mock data with reduced randomness
+        const symbols = ['AAPL', 'GOOGL', 'MSFT', 'AMZN', 'TSLA'];
+        const newPositions: Position[] = symbols.map((symbol) => {
+          const entryPrice = 150 + Math.random() * 50;
+          const currentPrice = entryPrice * (1 + (Math.random() - 0.5) * 0.05);
+          const quantity = Math.floor(Math.random() * 50) + 10;
+          const pnl = (currentPrice - entryPrice) * quantity;
+          const pnlPercent = ((currentPrice - entryPrice) / entryPrice) * 100;
 
-      setPositions(newPositions);
+          return {
+            symbol,
+            quantity,
+            entryPrice,
+            currentPrice,
+            pnl,
+            pnlPercent,
+          };
+        });
 
-      const total = newPositions.reduce((sum, pos) => sum + pos.pnl, 0);
-      setTotalPnL(total);
-      setTotalPnLPercent((total / initialCapital) * 100);
+        setPositions(newPositions);
+
+        const total = newPositions.reduce((sum, pos) => sum + pos.pnl, 0);
+        setTotalPnL(total);
+        setTotalPnLPercent((total / initialCapital) * 100);
+      } catch (error) {
+        console.error('Failed to fetch portfolio:', error);
+      }
     };
 
-    generatePortfolio();
-    const interval = setInterval(generatePortfolio, 2000);
+    fetchPortfolio();
+    const interval = setInterval(fetchPortfolio, 5000);
 
     return () => clearInterval(interval);
-  }, [initialCapital]);
+  }, [initialCapital, token]);
 
   return (
     <div

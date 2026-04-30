@@ -1,23 +1,22 @@
 import { useWebSocketSignal } from './hooks/useWebSocketSignal';
+import { useChartData } from './hooks/useChartData';
 import { SceneCanvas } from './components/SceneCanvas';
 import { SignalPanel } from './components/SignalPanel';
 import { TradingChart } from './components/TradingChart';
 import { TradingViews } from './components/TradingViews';
-import { CandlestickData, Time } from 'lightweight-charts';
+import { AuthFlow } from './components/AuthFlow';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { useState } from 'react';
 
-export default function App() {
+function ProtectedApp() {
+  const { isAuthenticated, login } = useAuth();
   useWebSocketSignal();
   const [showMultiView, setShowMultiView] = useState(false);
+  const { data: chartData } = useChartData('AAPL');
 
-  // Mock candlestick data for single chart
-  const chartData: CandlestickData<Time>[] = [
-    { time: 1714022400 as Time, open: 175.25, high: 175.40, low: 175.20, close: 175.30 },
-    { time: 1714022460 as Time, open: 175.30, high: 175.50, low: 175.25, close: 175.45 },
-    { time: 1714022520 as Time, open: 175.45, high: 175.60, low: 175.35, close: 175.55 },
-    { time: 1714022580 as Time, open: 175.55, high: 175.70, low: 175.40, close: 175.65 },
-    { time: 1714022640 as Time, open: 175.65, high: 175.80, low: 175.50, close: 175.75 },
-  ];
+  if (!isAuthenticated) {
+    return <AuthFlow onLogin={login} />;
+  }
 
   // Multi-symbol list
   const symbols = ['AAPL', 'GOOGL', 'MSFT', 'AMZN', 'TSLA', 'NVDA'];
@@ -72,5 +71,13 @@ export default function App() {
         <TradingChart symbol="AAPL" data={chartData} />
       </div>
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <ProtectedApp />
+    </AuthProvider>
   );
 }

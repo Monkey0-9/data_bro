@@ -177,6 +177,7 @@ services:
       - QUESTDB_PG_PORT=8812
       - QUESTDB_USER=admin
       - QUESTDB_PASSWORD=${QUESTDB_PASSWORD}
+      - SECRET_KEY=${SECRET_KEY}
       - CORS_ORIGINS=http://localhost:80
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8002/health"]
@@ -188,6 +189,68 @@ services:
       resources:
         limits:
           memory: 256M
+    networks:
+      - nexus
+
+  stream-quarkus:
+    build:
+      context: ./stream-quarkus
+    ports:
+      - "8080:8080"
+    depends_on:
+      questdb:
+        condition: service_healthy
+    environment:
+      - QUESTDB_HOST=questdb
+      - QUESTDB_ILP_PORT=9009
+      - AERON_CHANNEL=aeron:udp
+      - AERON_STREAM_ID=1
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/q/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    networks:
+      - nexus
+
+  cpp-signal:
+    build:
+      context: ./cpp_signals
+    depends_on:
+      questdb:
+        condition: service_healthy
+    environment:
+      - QUESTDB_HOST=questdb
+      - QUESTDB_PG_PORT=8812
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+    networks:
+      - nexus
+
+  gpu-sentiment:
+    build:
+      context: ./gpu_sentiment
+    depends_on:
+      - signal
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+    runtime: nvidia
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     networks:
       - nexus
 

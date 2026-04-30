@@ -1,11 +1,12 @@
 import os
 import logging
 from datetime import datetime, timedelta
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 import pandas as pd
 import asyncpg
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+import jwt
+from fastapi import FastAPI, HTTPException, Depends, Header
+from pydantic import BaseModel, Field, validator
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -20,6 +21,11 @@ QUESTDB_PASSWORD = os.environ.get("QUESTDB_PASSWORD")
 if not QUESTDB_PASSWORD:
     raise RuntimeError("QUESTDB_PASSWORD environment variable is required")
 QUESTDB_DATABASE = os.environ.get("QUESTDB_DATABASE", "qdb")
+SECRET_KEY = os.environ.get("SECRET_KEY")
+ALGORITHM = "HS256"
+
+if not SECRET_KEY:
+    raise RuntimeError("SECRET_KEY environment variable is required")
 
 # Global asyncpg pool
 pool: asyncpg.Pool | None = None
@@ -37,6 +43,25 @@ class BacktestConfig(BaseModel):
     end_date: str
     initial_capital: float = Field(..., gt=0)
     position_size: float = Field(default=1.0, gt=0)
+    
+    @validator('start_date', 'end_date')
+    def validate_date_format(cls, v):
+        """Validate date format is ISO 8601."""
+        try:
+            datetime.fromisoformat(v)
+            return v
+        except ValueError:
+            raise ValueError("Date must be in ISO 8601 format (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS)")
+    
+    @validator('end_date')
+    def end_after_start(cls, v, values):
+        """Validate end_date is after start_date."""
+        if 'start_date' in values:
+            start = datetime.fromisoformat(values['start_date'])
+            end = datetime.fromisoformat(v)
+            if end <= start:
+                raise ValueError("end_date must be after start_date")
+        return v
 
 
 class Trade(BaseModel):
@@ -90,8 +115,8 @@ async def fetch_historical_ticks(symbol: str, start: str, end: str) -> pd.DataFr
         return pd.DataFrame()
 
 
-def run_rsi_strategy(df: pd.DataFrame, rsi_period: int = 14, buy_threshold: float = 30, sell_threshold: float = 70) -> List[Trade]:
-    """Run RSI-based backtest strategy."""
+def run_rsi_strategy(df: pd.DataFrame, position_size: float, rsi_period: int = 14, buy_threshold: float = 30, sell_threshold: float = 70) -> List[Trade]:
+    """Run RSI-based backtest strategy with configurable position size."""
     if len(df) < rsi_period:
         return []
 
@@ -105,6 +130,7 @@ def run_rsi_strategy(df: pd.DataFrame, rsi_period: int = 14, buy_threshold: floa
     trades = []
     position = 0
     entry_price = 0.0
+    quantity = int(position_size)  # Use position_size from config
 
     for i in range(rsi_period, len(df)):
         current_rsi = rsi.iloc[i]
@@ -120,18 +146,18 @@ def run_rsi_strategy(df: pd.DataFrame, rsi_period: int = 14, buy_threshold: floa
                 symbol=df['symbol'].iloc[i],
                 action="BUY",
                 price=price,
-                quantity=100
+                quantity=quantity
             ))
         elif current_rsi > sell_threshold and position == 1:
             # Sell signal
             position = 0
-            pnl = (price - entry_price) * 100
+            pnl = (price - entry_price) * quantity
             trades.append(Trade(
                 timestamp=str(timestamp),
                 symbol=df['symbol'].iloc[i],
                 action="SELL",
                 price=price,
-                quantity=100,
+                quantity=quantity,
                 pnl=pnl
             ))
 
@@ -219,7 +245,7 @@ async def run_backtest(config: BacktestConfig) -> BacktestResult:
             roi=0.0
         )
 
-    trades = run_rsi_strategy(df)
+    trades = run_rsi_strategy(df, config.position_size)
     result = calculate_metrics(trades, config.initial_capital)
 
     logger.info(f"Backtest complete: {result.total_trades} trades, ROI: {result.roi}%")
@@ -251,10 +277,28 @@ async def shutdown():
         logger.info("Database pool closed")
 
 
+def verify_token(authorization: Optional[str] = Header(None)) -> dict:
+    """Verify JWT token from Authorization header."""
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Authorization header missing")
+    
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Invalid authorization format")
+    
+    token = authorization[7:]  # Remove 'Bearer ' prefix
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return payload
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+
 @app.post("/backtest/run")
 @limiter.limit("5/minute")
-async def run_backtest_endpoint(config: BacktestConfig) -> BacktestResult:
-    """Run backtest with rate limiting."""
+async def run_backtest_endpoint(config: BacktestConfig, _: dict = Depends(verify_token)) -> BacktestResult:
+    """Run backtest with rate limiting and JWT auth."""
     return await run_backtest(config)
 
 

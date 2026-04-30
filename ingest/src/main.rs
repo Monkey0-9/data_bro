@@ -44,12 +44,8 @@ async fn send_ilp(stream: &mut TcpStream, table: &str, symbol: &str, price: f64,
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize tracing with OpenTelemetry
+    // Initialize tracing with OpenTelemetry and Jaeger
     let filter = EnvFilter::from_default_env().add_directive("nexus_ingest=info".parse()?);
-    let subscriber = FmtSubscriber::builder().with_env_filter(filter).finish();
-    tracing::subscriber::set_global_default(subscriber)?;
-
-    // OpenTelemetry setup (optional Jaeger export)
     let tracer = opentelemetry_jaeger::new_agent_pipeline()
         .with_service_name("nexus-ingest")
         .install_simple()?;

@@ -26,6 +26,7 @@ DB_DSN = os.environ.get("DATABASE_URL")
 SECRET_KEY = os.environ.get("SECRET_KEY")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "15"))
+REFRESH_TOKEN_EXPIRE_DAYS = int(os.environ.get("REFRESH_TOKEN_EXPIRE_DAYS", "7"))
 
 if not SECRET_KEY:
     raise RuntimeError("SECRET_KEY environment variable is required")
@@ -96,6 +97,10 @@ class UserLogin(BaseModel):
     totp_code: str | None = None
 
 
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str
+
+
 @app.middleware("http")
 async def log_requests(request, call_next):
     start = time.time()
@@ -115,6 +120,17 @@ async def get_db() -> asyncpg.Connection:
             detail="Database pool not available",
         )
     return await db_pool.acquire()
+
+
+def verify_token(token: str) -> dict:
+    """Verify JWT token and return payload."""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return payload
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
 
 
 @app.post("/register", status_code=status.HTTP_201_CREATED)
@@ -144,20 +160,28 @@ async def register(user: UserCreate):
 
 @app.post("/totp/enable")
 @limiter.limit("10/minute")
-async def enable_totp(email: EmailStr):
+async def enable_totp(email: EmailStr, token: str):
+    """Enable TOTP for a user. Requires valid JWT token."""
+    payload = verify_token(token)
+    user_id = payload.get("sub")
+    
     conn = await get_db()
     try:
         row = await conn.fetchrow(
-            "SELECT id FROM users WHERE email = $1", email
+            "SELECT id, email FROM users WHERE id = $1", user_id
         )
         if not row:
             raise HTTPException(status_code=404, detail="User not found")
+        
+        # Verify email matches token owner
+        if row["email"] != email:
+            raise HTTPException(status_code=403, detail="Email does not match token owner")
 
         secret = pyotp.random_base32()
         await conn.execute(
-            "UPDATE users SET totp_secret = $1 WHERE email = $2",
+            "UPDATE users SET totp_secret = $1 WHERE id = $2",
             secret,
-            email,
+            user_id,
         )
         totp_uri = pyotp.totp.TOTP(secret).provisioning_uri(
             name=email, issuer_name="NEXUS"
@@ -187,10 +211,20 @@ async def login(user_login: UserLogin):
                 raise HTTPException(status_code=401, detail="Invalid TOTP code")
 
         expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-        payload = {"sub": str(row["id"]), "exp": expire}
-        token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+        refresh_expire = datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+        
+        access_payload = {"sub": str(row["id"]), "exp": expire, "type": "access"}
+        refresh_payload = {"sub": str(row["id"]), "exp": refresh_expire, "type": "refresh"}
+        
+        access_token = jwt.encode(access_payload, SECRET_KEY, algorithm=ALGORITHM)
+        refresh_token = jwt.encode(refresh_payload, SECRET_KEY, algorithm=ALGORITHM)
+        
         logger.info("User logged in: %s", user_login.email)
-        return {"access_token": token, "token_type": "bearer"}
+        return {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "token_type": "bearer"
+        }
     finally:
         await db_pool.release(conn)
 
@@ -207,6 +241,23 @@ async def health_check():
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"Database unavailable: {exc}",
         )
+
+
+@app.post("/refresh")
+@limiter.limit("20/minute")
+async def refresh_token(request: RefreshTokenRequest):
+    """Refresh access token using refresh token."""
+    payload = verify_token(request.refresh_token)
+    
+    if payload.get("type") != "refresh":
+        raise HTTPException(status_code=401, detail="Invalid token type")
+    
+    user_id = payload.get("sub")
+    expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_payload = {"sub": user_id, "exp": expire, "type": "access"}
+    access_token = jwt.encode(access_payload, SECRET_KEY, algorithm=ALGORITHM)
+    
+    return {"access_token": access_token, "token_type": "bearer"}
 
 
 @app.get("/metrics")

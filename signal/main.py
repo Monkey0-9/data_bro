@@ -5,8 +5,9 @@ from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
+import jwt
 import redis.asyncio as redis
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from opentelemetry import trace
 from opentelemetry.exporter.prometheus import PrometheusMetricReader
@@ -23,6 +24,11 @@ from indicators import momentum_signal, push_price
 from sentiment import score as sentiment_score
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+SECRET_KEY = os.environ.get("SECRET_KEY")
+ALGORITHM = "HS256"
+
+if not SECRET_KEY:
+    raise RuntimeError("SECRET_KEY environment variable is required")
 
 # --- Logging ---
 logging.basicConfig(
@@ -152,8 +158,27 @@ async def predict_signal(state: MarketState):
     return result
 
 
+def verify_websocket_token(token: str) -> dict:
+    """Verify JWT token for WebSocket connection."""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return payload
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+
 @app.websocket("/ws/signals")
-async def websocket_signals(websocket: WebSocket):
+async def websocket_signals(websocket: WebSocket, token: str = Query(...)):
+    """WebSocket endpoint with JWT authentication."""
+    # Verify token before accepting connection
+    try:
+        verify_websocket_token(token)
+    except HTTPException as e:
+        await websocket.close(code=1008, reason=e.detail)
+        return
+    
     await websocket.accept()
     ws_clients.add(websocket)
     logger.info("WebSocket client connected: %s", websocket.client)

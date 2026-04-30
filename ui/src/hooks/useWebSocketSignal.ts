@@ -1,15 +1,18 @@
 import { useEffect, useRef } from 'react';
 import { useSignalStore } from '../store/signalStore';
-
-const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8001/ws/signals';
+import { useAuth } from '../contexts/AuthContext';
 
 export function useWebSocketSignal() {
+  const { token } = useAuth();
   const { setSignal, setLoading, setError, signal } = useSignalStore();
   const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
+    if (!token) return;
+    
     setLoading(true);
-    const ws = new WebSocket(WS_URL);
+    const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8001';
+    const ws = new WebSocket(`${API_URL.replace('http', 'ws')}/ws/signals?token=${token}`);
     wsRef.current = ws;
 
     ws.onopen = () => {

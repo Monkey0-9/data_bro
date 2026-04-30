@@ -1,11 +1,12 @@
 import os
 import logging
 from datetime import datetime, timedelta
-from typing import List, Dict
+from typing import List, Dict, Optional
 import numpy as np
 import pandas as pd
 import asyncpg
-from fastapi import FastAPI, HTTPException
+import jwt
+from fastapi import FastAPI, HTTPException, Depends, Header
 from pydantic import BaseModel, Field
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -21,6 +22,11 @@ QUESTDB_PASSWORD = os.environ.get("QUESTDB_PASSWORD")
 if not QUESTDB_PASSWORD:
     raise RuntimeError("QUESTDB_PASSWORD environment variable is required")
 QUESTDB_DATABASE = os.environ.get("QUESTDB_DATABASE", "qdb")
+SECRET_KEY = os.environ.get("SECRET_KEY")
+ALGORITHM = "HS256"
+
+if not SECRET_KEY:
+    raise RuntimeError("SECRET_KEY environment variable is required")
 
 # Global asyncpg pool
 pool: asyncpg.Pool | None = None
@@ -43,6 +49,7 @@ class VaRRequest(BaseModel):
     positions: List[Position]
     confidence_level: float = Field(default=0.95, gt=0, le=1)
     time_horizon_days: int = Field(default=1, gt=0)
+    var_99_multiplier: float = Field(default=1.5, gt=0, le=3, description="Multiplier for VaR 99% estimation")
 
 
 class VaRResult(BaseModel):
@@ -54,36 +61,47 @@ class VaRResult(BaseModel):
     risk_alert: bool
 
 
-async def fetch_price_history(symbol: str, days: int = 252) -> pd.DataFrame:
-    """Fetch historical price data for VaR calculation using asyncpg pool."""
+async def fetch_price_history_batch(symbols: List[str], days: int = 252) -> Dict[str, pd.DataFrame]:
+    """Fetch historical price data for multiple symbols in a single query."""
     global pool
     if pool is None:
         logger.error("Database pool not initialized")
-        return pd.DataFrame()
+        return {}
     
     try:
         async with pool.acquire() as conn:
             end_date = datetime.now()
             start_date = end_date - timedelta(days=days)
             
-            # Parameterized query to prevent SQL injection
+            # Single query for all symbols to avoid double fetch
             query = """
-                SELECT timestamp, price
+                SELECT symbol, timestamp, price
                 FROM ticks
-                WHERE symbol = $1
+                WHERE symbol = ANY($1)
                 AND timestamp BETWEEN $2 AND $3
-                ORDER BY timestamp ASC
+                ORDER BY symbol, timestamp ASC
             """
-            rows = await conn.fetch(query, symbol, start_date, end_date)
+            rows = await conn.fetch(query, symbols, start_date, end_date)
             
             if not rows:
-                return pd.DataFrame()
+                return {}
             
-            df = pd.DataFrame([dict(row) for row in rows])
-            return df
+            # Group by symbol
+            result: Dict[str, pd.DataFrame] = {}
+            for row in rows:
+                symbol = row['symbol']
+                if symbol not in result:
+                    result[symbol] = []
+                result[symbol].append({'timestamp': row['timestamp'], 'price': row['price']})
+            
+            # Convert to DataFrames
+            for symbol in result:
+                result[symbol] = pd.DataFrame(result[symbol])
+            
+            return result
     except Exception as e:
-        logger.error(f"Failed to fetch price history for {symbol}: {e}")
-        return pd.DataFrame()
+        logger.error(f"Failed to fetch price history batch: {e}")
+        return {}
 
 
 def calculate_returns(prices: pd.Series) -> np.ndarray:
@@ -110,21 +128,24 @@ def calculate_expected_shortfall(returns: np.ndarray, confidence: float) -> floa
     return np.mean(tail_losses)
 
 
-async def calculate_portfolio_var(positions: List[Position], confidence: float, horizon_days: int) -> VaRResult:
-    """Calculate portfolio VaR with position aggregation."""
+async def calculate_portfolio_var(positions: List[Position], confidence: float, horizon_days: int, var_99_multiplier: float = 1.5) -> VaRResult:
+    """Calculate portfolio VaR with position aggregation. Single DB fetch for all symbols."""
     total_value = 0.0
     position_values = []
     position_vars = []
     max_risk_symbol = ""
     max_risk_value = 0.0
 
+    # Fetch all price histories in a single batch query
+    symbols = [pos.symbol for pos in positions]
+    price_data = await fetch_price_history_batch(symbols, days=252)
+
     for pos in positions:
         position_value = pos.quantity * pos.current_price
         total_value += position_value
         position_values.append(position_value)
 
-        # Fetch historical data for this position
-        df = await fetch_price_history(pos.symbol, days=252)
+        df = price_data.get(pos.symbol, pd.DataFrame())
         if df.empty:
             logger.warning(f"No price history for {pos.symbol}, using 0% volatility")
             position_vars.append(0.0)
@@ -141,12 +162,11 @@ async def calculate_portfolio_var(positions: List[Position], confidence: float, 
 
     # Simple sum of position VaRs (no correlation matrix for simplicity)
     portfolio_var_95 = sum(position_vars) * (horizon_days ** 0.5)
-    portfolio_var_99 = portfolio_var_95 * 1.5  # Approximate scaling
+    portfolio_var_99 = portfolio_var_95 * var_99_multiplier  # Configurable scaling
 
-    # Calculate expected shortfall
+    # Calculate expected shortfall from batch data
     all_returns = []
-    for pos in positions:
-        df = await fetch_price_history(pos.symbol, days=252)
+    for symbol, df in price_data.items():
         if not df.empty:
             returns = calculate_returns(df['price'])
             all_returns.extend(returns.tolist())
@@ -194,17 +214,36 @@ async def shutdown():
         logger.info("Database pool closed")
 
 
+def verify_token(authorization: Optional[str] = Header(None)) -> dict:
+    """Verify JWT token from Authorization header."""
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Authorization header missing")
+    
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Invalid authorization format")
+    
+    token = authorization[7:]  # Remove 'Bearer ' prefix
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return payload
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+
 @app.post("/var/calculate")
 @limiter.limit("10/minute")
-async def calculate_var_endpoint(request: VaRRequest) -> VaRResult:
-    """Calculate portfolio Value at Risk with rate limiting."""
+async def calculate_var_endpoint(request: VaRRequest, _: dict = Depends(verify_token)) -> VaRResult:
+    """Calculate portfolio Value at Risk with rate limiting and JWT auth."""
     if not request.positions:
         raise HTTPException(status_code=400, detail="No positions provided")
     
     result = await calculate_portfolio_var(
         request.positions,
         request.confidence_level,
-        request.time_horizon_days
+        request.time_horizon_days,
+        request.var_99_multiplier
     )
     return result
 

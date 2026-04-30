@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 import asyncpg
 import jwt
 import pyotp
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from opentelemetry import trace
 from opentelemetry.exporter.prometheus import PrometheusMetricReader
@@ -135,7 +135,7 @@ def verify_token(token: str) -> dict:
 
 @app.post("/register", status_code=status.HTTP_201_CREATED)
 @limiter.limit("10/minute")
-async def register(user: UserCreate):
+async def register(request: Request, user: UserCreate):
     conn = await get_db()
     try:
         existing = await conn.fetchval(
@@ -160,7 +160,7 @@ async def register(user: UserCreate):
 
 @app.post("/totp/enable")
 @limiter.limit("10/minute")
-async def enable_totp(email: EmailStr, token: str):
+async def enable_totp(request: Request, email: EmailStr, token: str):
     """Enable TOTP for a user. Requires valid JWT token."""
     payload = verify_token(token)
     user_id = payload.get("sub")
@@ -193,7 +193,7 @@ async def enable_totp(email: EmailStr, token: str):
 
 @app.post("/login")
 @limiter.limit("20/minute")
-async def login(user_login: UserLogin):
+async def login(request: Request, user_login: UserLogin):
     conn = await get_db()
     try:
         row = await conn.fetchrow(
@@ -219,6 +219,14 @@ async def login(user_login: UserLogin):
         access_token = jwt.encode(access_payload, SECRET_KEY, algorithm=ALGORITHM)
         refresh_token = jwt.encode(refresh_payload, SECRET_KEY, algorithm=ALGORITHM)
         
+        # Store refresh token hash in sessions table for revocation support
+        await conn.execute(
+            "INSERT INTO sessions (user_id, refresh_token, expires_at) VALUES ($1, $2, $3)",
+            str(row["id"]),
+            refresh_token,
+            refresh_expire,
+        )
+        
         logger.info("User logged in: %s", user_login.email)
         return {
             "access_token": access_token,
@@ -243,21 +251,61 @@ async def health_check():
         )
 
 
+class LogoutRequest(BaseModel):
+    refresh_token: str
+
+
 @app.post("/refresh")
 @limiter.limit("20/minute")
-async def refresh_token(request: RefreshTokenRequest):
+async def refresh_token(request: Request, token_request: RefreshTokenRequest):
     """Refresh access token using refresh token."""
-    payload = verify_token(request.refresh_token)
+    payload = verify_token(token_request.refresh_token)
     
     if payload.get("type") != "refresh":
         raise HTTPException(status_code=401, detail="Invalid token type")
     
     user_id = payload.get("sub")
+    
+    # Verify refresh token exists in sessions table
+    conn = await get_db()
+    try:
+        session = await conn.fetchrow(
+            "SELECT id FROM sessions WHERE refresh_token = $1 AND expires_at > NOW()",
+            token_request.refresh_token,
+        )
+        if not session:
+            raise HTTPException(status_code=401, detail="Refresh token revoked or expired")
+    finally:
+        await db_pool.release(conn)
+    
     expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_payload = {"sub": user_id, "exp": expire, "type": "access"}
     access_token = jwt.encode(access_payload, SECRET_KEY, algorithm=ALGORITHM)
     
     return {"access_token": access_token, "token_type": "bearer"}
+
+
+@app.post("/logout")
+@limiter.limit("20/minute")
+async def logout(request: Request, logout_req: LogoutRequest):
+    """Logout user by revoking refresh token."""
+    payload = verify_token(logout_req.refresh_token)
+    
+    if payload.get("type") != "refresh":
+        raise HTTPException(status_code=401, detail="Invalid token type")
+    
+    conn = await get_db()
+    try:
+        result = await conn.execute(
+            "DELETE FROM sessions WHERE refresh_token = $1",
+            logout_req.refresh_token,
+        )
+        if result == "DELETE 0":
+            raise HTTPException(status_code=404, detail="Session not found")
+        logger.info("User logged out, session revoked")
+        return {"message": "Logged out successfully"}
+    finally:
+        await db_pool.release(conn)
 
 
 @app.get("/metrics")

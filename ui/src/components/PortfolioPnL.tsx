@@ -14,6 +14,22 @@ interface PortfolioPnLProps {
   initialCapital: number;
 }
 
+// Generate static demo data once — not re-randomized
+function generateDemoPositions(): Position[] {
+  const symbols = ['AAPL', 'GOOGL', 'MSFT', 'AMZN', 'TSLA'];
+  const basePrices: Record<string, number> = {
+    AAPL: 175.25, GOOGL: 142.80, MSFT: 380.50, AMZN: 178.35, TSLA: 242.60,
+  };
+  return symbols.map((symbol) => {
+    const entryPrice = basePrices[symbol];
+    const currentPrice = entryPrice * (1 + (Math.random() - 0.5) * 0.02); // Very small daily drift
+    const quantity = Math.floor(Math.random() * 50) + 10;
+    const pnl = (currentPrice - entryPrice) * quantity;
+    const pnlPercent = ((currentPrice - entryPrice) / entryPrice) * 100;
+    return { symbol, quantity, entryPrice, currentPrice, pnl, pnlPercent };
+  });
+}
+
 export const PortfolioPnL: React.FC<PortfolioPnLProps> = ({ initialCapital = 100000 }) => {
   const { token } = useAuth();
   const [positions, setPositions] = useState<Position[]>([]);
@@ -23,42 +39,12 @@ export const PortfolioPnL: React.FC<PortfolioPnLProps> = ({ initialCapital = 100
   useEffect(() => {
     if (!token) return;
 
-    const fetchPortfolio = async () => {
-      try {
-        // In production, fetch from portfolio management API
-        // For now, using mock data with reduced randomness
-        const symbols = ['AAPL', 'GOOGL', 'MSFT', 'AMZN', 'TSLA'];
-        const newPositions: Position[] = symbols.map((symbol) => {
-          const entryPrice = 150 + Math.random() * 50;
-          const currentPrice = entryPrice * (1 + (Math.random() - 0.5) * 0.05);
-          const quantity = Math.floor(Math.random() * 50) + 10;
-          const pnl = (currentPrice - entryPrice) * quantity;
-          const pnlPercent = ((currentPrice - entryPrice) / entryPrice) * 100;
-
-          return {
-            symbol,
-            quantity,
-            entryPrice,
-            currentPrice,
-            pnl,
-            pnlPercent,
-          };
-        });
-
-        setPositions(newPositions);
-
-        const total = newPositions.reduce((sum, pos) => sum + pos.pnl, 0);
-        setTotalPnL(total);
-        setTotalPnLPercent((total / initialCapital) * 100);
-      } catch (error) {
-        console.error('Failed to fetch portfolio:', error);
-      }
-    };
-
-    fetchPortfolio();
-    const interval = setInterval(fetchPortfolio, 5000);
-
-    return () => clearInterval(interval);
+    // Generate demo data once on mount — no re-randomization interval
+    const demoPositions = generateDemoPositions();
+    setPositions(demoPositions);
+    const total = demoPositions.reduce((sum, pos) => sum + pos.pnl, 0);
+    setTotalPnL(total);
+    setTotalPnLPercent((total / initialCapital) * 100);
   }, [initialCapital, token]);
 
   return (
@@ -71,9 +57,24 @@ export const PortfolioPnL: React.FC<PortfolioPnLProps> = ({ initialCapital = 100
         width: '100%',
       }}
     >
-      <h3 style={{ color: '#60a5fa', marginBottom: '12px', fontSize: '16px' }}>
-        Portfolio P&L
-      </h3>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+        <h3 style={{ color: '#60a5fa', fontSize: '16px', margin: 0 }}>
+          Portfolio P&L
+        </h3>
+        <span
+          style={{
+            background: '#f59e0b',
+            color: '#000',
+            fontSize: '10px',
+            fontWeight: 'bold',
+            padding: '2px 8px',
+            borderRadius: '4px',
+            textTransform: 'uppercase',
+          }}
+        >
+          DEMO / MOCK DATA
+        </span>
+      </div>
 
       {/* Summary */}
       <div

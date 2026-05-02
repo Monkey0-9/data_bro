@@ -16,7 +16,7 @@ rand_distr = "0.4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-opentelemetry = "0.22"
-opentelemetry = "0.21"
+opentelemetry = "0.31"
 opentelemetry-jaeger = "0.20"
 backoff = { version = "0.4", features = ["tokio"] }
 tokio-tungstenite = { version = "0.20", features = ["native-tls"] }

@@ -160,19 +160,34 @@ async def calculate_portfolio_var(positions: List[Position], confidence: float, 
             max_risk_value = position_var
             max_risk_symbol = pos.symbol
 
-    # Simple sum of position VaRs (no correlation matrix for simplicity)
-    portfolio_var_95 = sum(position_vars) * (horizon_days ** 0.5)
-    portfolio_var_99 = portfolio_var_95 * var_99_multiplier  # Configurable scaling
-
-    # Calculate expected shortfall from batch data
-    all_returns = []
-    for symbol, df in price_data.items():
+    # Calculate Portfolio Historical Simulation VaR
+    # 1. Align all returns into a single DataFrame to handle correlations correctly
+    returns_df = pd.DataFrame()
+    for pos in positions:
+        df = price_data.get(pos.symbol, pd.DataFrame())
         if not df.empty:
-            returns = calculate_returns(df['price'])
-            all_returns.extend(returns.tolist())
+            rets = calculate_returns(df['price'])
+            returns_df[pos.symbol] = pd.Series(rets)
     
-    if all_returns:
-        es_95 = abs(calculate_expected_shortfall(np.array(all_returns), 0.95)) * total_value
+    returns_df = returns_df.dropna() # Only keep days where all assets have data
+    
+    if returns_df.empty:
+        # Fallback to sum of absolute VaRs if no overlap
+        portfolio_var_95 = sum(position_vars) * (horizon_days ** 0.5)
+    else:
+        # 2. Calculate daily portfolio log-returns: sum(weight_i * return_i)
+        weights = np.array([pos.quantity * pos.current_price / total_value for pos in positions])
+        portfolio_returns = returns_df.values.dot(weights)
+        
+        # 3. VaR is the percentile of the portfolio's historical returns
+        var_percentile = (1 - confidence) * 100
+        portfolio_var_95 = abs(np.percentile(portfolio_returns, var_percentile)) * total_value * (horizon_days ** 0.5)
+
+    portfolio_var_99 = portfolio_var_95 * var_99_multiplier
+
+    # Calculate expected shortfall (Conditional VaR)
+    if not returns_df.empty:
+        es_95 = abs(calculate_expected_shortfall(portfolio_returns, 0.95)) * total_value
     else:
         es_95 = 0.0
 

@@ -3,7 +3,22 @@ import logging
 import pandas as pd
 import pandas_ta as ta
 import asyncpg
+import ctypes
 from typing import Literal
+
+# --- High Performance C++ Bindings ---
+try:
+    # Try loading the shared library (compiled via CMake in the C++ service)
+    # libpath = os.path.join(os.path.dirname(__file__), "../cpp_signals/build/libindicators.so")
+    # For now, we assume it might be in the same directory in the Docker image
+    _cpp_lib = ctypes.CDLL("./libindicators.so")
+    _cpp_lib.calculate_rsi.argtypes = [ctypes.POINTER(ctypes.c_double), ctypes.c_int, ctypes.c_int]
+    _cpp_lib.calculate_rsi.restype = ctypes.c_double
+    HAS_CPP_SIG = True
+    logger.info("NEXUS High-Performance C++ indicators loaded successfully")
+except Exception as e:
+    HAS_CPP_SIG = False
+    logger.warning(f"C++ indicators not found, falling back to pandas_ta: {e}")
 
 # Enterprise momentum indicator using QuestDB + TA-Lib
 # Queries real tick data and computes RSI with proper lookback
@@ -81,9 +96,16 @@ async def momentum_signal(symbol: str) -> tuple[Literal["BUY", "SELL", "HOLD"], 
     if len(df) < 14:
         return "HOLD", 0.5
 
-    # Compute RSI with 14-period lookback
-    rsi_series = ta.rsi(df["price"], length=14)
-    rsi = rsi_series.iloc[-1]
+    if HAS_CPP_SIG:
+        # Prepare data for C++ call
+        prices = df["price"].values.astype(ctypes.c_double)
+        n = len(prices)
+        prices_ptr = prices.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
+        rsi = _cpp_lib.calculate_rsi(prices_ptr, n, 14)
+    else:
+        # Compute RSI with 14-period lookback (Wilder's smoothing)
+        rsi_series = ta.rsi(df["price"], length=14)
+        rsi = rsi_series.iloc[-1]
 
     if pd.isna(rsi):
         return "HOLD", 0.5

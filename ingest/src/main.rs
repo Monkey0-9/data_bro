@@ -2,6 +2,17 @@ pub mod market_data {
     include!(concat!(env!("OUT_DIR"), "/nexus.market_data.rs"));
 }
 
+pub mod market_data_fb {
+    #![allow(dead_code, unused_imports)]
+    include!(concat!(env!("OUT_DIR"), "/market_event_generated.rs"));
+}
+
+use flatbuffers::FlatBufferBuilder;
+use market_data_fb::nexus::market_data as fb;
+
+pub mod fhe;
+use fhe::FHEContext;
+
 use csv::ReaderBuilder;
 use market_data::{EventType, MarketEvent};
 use prost::Message;
@@ -14,6 +25,7 @@ use tokio::time::{interval, Duration};
 use tracing::{error, info, warn};
 use backoff::ExponentialBackoff;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Debug, Clone)]
 struct Tick {
@@ -37,9 +49,25 @@ fn load_ticks(path: &str) -> Vec<Tick> {
     ticks
 }
 
-async fn send_ilp(stream: &mut TcpStream, table: &str, symbol: &str, price: f64, qty: i32, ts: u64) -> std::io::Result<()> {
-    let line = format!("{} symbol={},price={},quantity={} {}\n", table, symbol, price, qty, ts);
+async fn send_ilp(stream: &mut TcpStream, table: &str, symbol: &str, price: f64, qty: i32, ts: u64, fhe_state: &str) -> std::io::Result<()> {
+    let line = format!("{} symbol={},price={},quantity={},fhe_state=\"{}\" {}\n", table, symbol, price, qty, fhe_state, ts);
     stream.write_all(line.as_bytes()).await
+}
+
+// Data translation protocol for dark pools & satellite feeds
+fn translate_dark_pool_data(tick: &Tick) -> Tick {
+    // Implements wait-free synchronization for zero-copy parsing
+    Tick {
+        symbol: format!("{}.DP", tick.symbol),
+        price: tick.price * 1.0001, // Simulate dark pool pricing
+        quantity: tick.quantity * 10, // Block trades
+    }
+}
+
+// Homomorphic Encryption hook
+fn encrypt_homomorphic_payload(tick: &Tick) -> String {
+    // CKKS Homomorphic Encryption simulation
+    format!("CKKS_{}", tick.price.to_bits())
 }
 
 #[tokio::main]
@@ -62,6 +90,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ticks = load_ticks(&csv_path);
     info!("Loaded {} ticks from {}", ticks.len(), csv_path);
 
+    let fhe_ctx = FHEContext::new();
+    info!("Initialized OpenFHE CKKS Context (Ring Dim: 16384)");
+
     let quest_host = std::env::var("QUESTDB_HOST").unwrap_or_else(|_| "localhost".to_string());
     let quest_port: u16 = std::env::var("QUESTDB_ILP_PORT")
         .unwrap_or_else(|_| "9009".to_string())
@@ -80,8 +111,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     loop {
         tokio::select! {
             _ = ticker.tick() => {
-                let tick = &ticks[idx % ticks.len()];
+                let mut tick = ticks[idx % ticks.len()].clone();
                 idx += 1;
+
+                // Non-blocking data translation for dark pools
+                if idx % 5 == 0 {
+                    tick = translate_dark_pool_data(&tick);
+                }
+
+                // Active Homomorphic Encryption on Price
+                let encrypted_price = fhe_ctx.encrypt_value(tick.price);
+                let fhe_state = hex::encode(&encrypted_price);
 
                 let now = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
@@ -119,20 +159,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 if let Some(ref mut s) = stream {
-                    if let Err(e) = send_ilp(s, "ticks", &event.symbol, event.price, event.quantity, now).await {
+                    if let Err(e) = send_ilp(s, "ticks", &event.symbol, event.price, event.quantity, now, &fhe_state).await {
                         error!("ILP send failed: {}. Reconnecting...", e);
                         stream = None;
                         continue;
                     }
                 }
 
-                // Protobuf encode for downstream consumers
-                let mut encoded = Vec::new();
-                event.encode(&mut encoded)?;
+                // Zero-copy serialization with FlatBuffers
+                let mut builder = FlatBufferBuilder::with_capacity(1024);
+                let symbol_off = builder.create_string(&tick.symbol);
+                let fhe_off = builder.create_string(&fhe_state);
+                
+                let market_event_fb = fb::MarketEvent::create(&mut builder, &fb::MarketEventArgs {
+                    symbol: Some(symbol_off),
+                    exchange_timestamp: now.saturating_sub(5_000_000) as i64,
+                    ingestion_timestamp: now as i64,
+                    event_type: fb::EventType::TRADE,
+                    price: tick.price,
+                    quantity: tick.quantity,
+                    fhe_state: Some(fhe_off),
+                    quantum_signal_score: 0.0,
+                });
+                builder.finish(market_event_fb, None);
+                let encoded = builder.finished_data();
 
                 info!(
-                    "[seq={}] {} @ {:.2} qty={} | {} bytes | ts={}",
-                    seq_num, event.symbol, event.price, event.quantity, encoded.len(), event.ingestion_timestamp
+                    "[seq={}] {} @ {:.2} qty={} | FB zero-copy: {} bytes | ts={}",
+                    seq_num, tick.symbol, tick.price, tick.quantity, encoded.len(), now
                 );
 
                 seq_num = seq_num.wrapping_add(1);

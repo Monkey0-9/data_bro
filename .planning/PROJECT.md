@@ -1,4 +1,4 @@
-﻿# NEXUS
+# NEXUS
 
 ## What This Is
 
@@ -22,27 +22,28 @@ Real-time, AI-enriched market intelligence delivered through a spatial interface
 - [ ] Massively parallel stream processing engine (Apache Flink concepts, C++/Rust, non-blocking/wait-free synchronization)
 - [ ] Direct data translation protocols for CME Globex (v1: ES and NQ futures), with extensible connectors for dark pools, additional brokerages, news feeds, satellite, and emerging data sources
 - [ ] Normalized, typed event stream from heterogeneous raw feeds with sub-millisecond latency targets
-- [ ] Real-time homomorphic encryption on data at rest and in transit; quantum ML models process directly on encrypted data
+- [ ] Kernel-bypass ingestion (DPDK/Solarflare) for zero-jitter data path
+- [ ] Zero-copy serialization (SBE or FlatBuffers) across Rust, Flink, and UI
+- [ ] Aeron Cluster messaging bus for fault-tolerant, sub-microsecond distributed logging
+- [ ] Massively parallel stream processing architecture using Apache Flink with wait-free synchronization
 
-**AI / Analytics Engine**
-- [ ] Perpetually learning reinforcement learning (RL) models for real-time market signal generation and dynamic portfolio suggestions
-- [ ] Multimodal AI sentiment analytics integrating price, news text, social/satellite feeds
-- [ ] Quantum computing-optimized modeling (quantum-inspired algorithms) for portfolio optimization and scenario analysis
-- [ ] Genetic algorithm layer for strategy parameter evolution and network condition adaptation
-- [ ] Real-time pre-trade risk checks and signal confidence scoring before external staging
+**Security & Privacy Fortress**
+- [ ] Active Fully Homomorphic Encryption (FHE) using OpenFHE for position/capital privacy
+- [ ] Hardware-bound Zero-Trust (WebAuthn / Security Keys)
+- [ ] Zero-Knowledge Proof (ZKP) performance reporting
+- [ ] AI-powered adaptive firewall on a distributed global mesh
 
-**Distributed Infrastructure**
-- [ ] Sharded, geographically distributed databases with homomorphic encryption (encrypted data queryable by ML models without decryption)
-- [ ] Distributed global mesh network for real-time state synchronization across nodes
-- [ ] AI-powered adaptive firewall that continuously updates security posture based on network telemetry and threat signals
-- [ ] Perpetually learning infrastructure layer updating mesh routing and node health in real time
+**Intelligence Layer (Predictive Edge)**
+- [ ] Multi-Agent Reinforcement Learning (MARL) swarm simulating market participants
+- [ ] Multimodal Data Fusion (Temporal Fusion Transformer) aligning soft (satellite/sentiment) and hard data
+- [ ] Stochastic Game Theory (Nash Equilibrium) for optimal non-impact entry sizing
+- [ ] Real-time pre-trade risk checks and signal confidence scoring
 
-**Spatial Interface**
-- [ ] Premium spatial 3D web application (WebGL/WebGPU + Three.js / Babylon.js) as base experience; runs in any modern browser on multi-monitor setups
-- [ ] Immersive data visualizations: 3D order books, correlation spheres, spatial heatmaps, volatility surfaces, RL signal overlays
-- [ ] WebXR progressive enhancement for AR/VR on Apple Vision Pro, Meta Quest Pro, HoloLens 2
-- [ ] Gesture and voice manipulation of spatial data objects
-- [ ] Real-time dynamic portfolio suggestion cards overlaid on live market data
+**Spatial Intelligence (UI)**
+- [ ] WebGPU-accelerated rendering for 120 FPS visualization of millions of data points
+- [ ] Topological Data Analysis (TDA) maps representing market stress clusters
+- [ ] Probabilistic Shadowing: 3D visual shadows for predicted price paths (5/15/60m)
+- [ ] Immersive visualizations: 3D order books, correlation spheres, volatility surfaces
 
 **Signal Delivery (No Execution)**
 - [ ] Pure analytics and signal delivery model ΓÇö zero proprietary matching engine, zero order routing, zero broker-dealer obligations

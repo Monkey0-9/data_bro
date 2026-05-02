@@ -1,0 +1,20 @@
+namespace nexus.market_data;
+
+enum EventType : byte {
+    TRADE = 0,
+    QUOTE = 1,
+    SIGNAL = 2
+}
+
+table MarketEvent {
+    symbol: string;
+    exchange_timestamp: long;
+    ingestion_timestamp: long;
+    event_type: EventType;
+    price: double;
+    quantity: int;
+    fhe_state: string;
+    quantum_signal_score: double;
+}
+
+root_type MarketEvent;

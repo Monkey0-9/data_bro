@@ -62,14 +62,28 @@ export const AuthFlow: React.FC<AuthFlowProps> = ({ onLogin }) => {
     >
       <div
         style={{
-          background: '#111827',
-          padding: '32px',
-          borderRadius: '16px',
-          border: '1px solid #374151',
+          background: 'rgba(17, 24, 39, 0.7)',
+          backdropFilter: 'blur(16px) saturate(180%)',
+          WebkitBackdropFilter: 'blur(16px) saturate(180%)',
+          padding: '40px',
+          borderRadius: '24px',
+          border: '1px solid rgba(255, 255, 255, 0.1)',
+          boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.8)',
           width: '100%',
-          maxWidth: '400px',
+          maxWidth: '420px',
+          position: 'relative',
+          overflow: 'hidden',
         }}
       >
+        <div style={{
+          position: 'absolute',
+          top: '-50%',
+          left: '-50%',
+          width: '200%',
+          height: '200%',
+          background: 'radial-gradient(circle at 50% 50%, rgba(59, 130, 246, 0.1) 0%, transparent 50%)',
+          pointerEvents: 'none',
+        }} />
         <h2 style={{ color: '#60a5fa', marginBottom: '24px', fontSize: '24px', textAlign: 'center' }}>
           {isLogin ? 'Login' : 'Register'}
         </h2>

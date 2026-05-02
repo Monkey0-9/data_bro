@@ -22,6 +22,9 @@ from slowapi.util import get_remote_address
 
 from indicators import momentum_signal, push_price
 from sentiment import score as sentiment_score
+from marl_engine import MARLEngine
+
+marl_engine = MARLEngine()
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 SECRET_KEY = os.environ.get("SECRET_KEY")
@@ -99,6 +102,8 @@ class SignalResponse(BaseModel):
     momentum_signal: str
     confidence: float
     suggested_action: str
+    equilibrium_score: float = 0.0
+    agent_actions: dict = {}
 
 
 # --- Request metrics ---
@@ -132,6 +137,10 @@ async def predict_signal(state: MarketState):
     else:
         action = "HOLD"
 
+    # MARL Swarm Prediction
+    dummy_market_state = [state.price] * 64 # Simplified state representation for v1
+    marl_prediction = marl_engine.predict_swarm_outcome(dummy_market_state)
+
     result = {
         "symbol": state.symbol,
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -141,6 +150,8 @@ async def predict_signal(state: MarketState):
         "momentum_signal": signal,
         "confidence": round(confidence, 4),
         "suggested_action": action,
+        "equilibrium_score": round(marl_prediction["equilibrium_score"], 4),
+        "agent_actions": {k: v.tolist() for k, v in marl_prediction["agent_actions"].items()},
     }
 
     # Publish to Redis pubsub for multi-instance broadcasting

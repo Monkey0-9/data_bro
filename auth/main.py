@@ -31,7 +31,7 @@ REFRESH_TOKEN_EXPIRE_DAYS = int(os.environ.get("REFRESH_TOKEN_EXPIRE_DAYS", "7")
 if not SECRET_KEY:
     raise RuntimeError("SECRET_KEY environment variable is required")
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+pwd_context = CryptContext(schemes=["sha256_crypt"], deprecated="auto")
 
 logging.basicConfig(
     level=logging.INFO,

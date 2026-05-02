@@ -23,40 +23,42 @@ public:
     RSI(int p = 14) : period(p), prev_gain(0.0), prev_loss(0.0) {}
 
     double update(double price) override {
+        if (prices.empty()) {
+            prices.push_back(price);
+            return 50.0;
+        }
+
+        double change = price - prices.back();
         prices.push_back(price);
         if (prices.size() > period + 1) {
             prices.erase(prices.begin());
         }
 
-        if (prices.size() < period + 1) {
-            return 50.0; // Neutral
-        }
+        double gain = std::max(0.0, change);
+        double loss = std::max(0.0, -change);
 
-        // Calculate gains and losses
-        double gain = 0.0;
-        double loss = 0.0;
-        for (size_t i = 1; i < prices.size(); ++i) {
-            double change = prices[i] - prices[i-1];
-            if (change > 0) {
-                gain += change;
-            } else {
-                loss -= change;
+        if (prev_gain == 0.0 && prev_loss == 0.0 && prices.size() == period + 1) {
+            // Initial calculation: Simple Average
+            double total_gain = 0.0;
+            double total_loss = 0.0;
+            for (size_t i = 1; i < prices.size(); ++i) {
+                double diff = prices[i] - prices[i-1];
+                if (diff > 0) total_gain += diff;
+                else total_loss -= diff;
             }
+            prev_gain = total_gain / period;
+            prev_loss = total_loss / period;
+        } else if (prices.size() > period) {
+            // Wilder's Smoothing
+            prev_gain = (prev_gain * (period - 1) + gain) / period;
+            prev_loss = (prev_loss * (period - 1) + loss) / period;
+        } else {
+            return 50.0;
         }
 
-        // Smoothed moving average
-        double avg_gain = (prev_gain * (period - 1) + gain) / period;
-        double avg_loss = (prev_loss * (period - 1) + loss) / period;
-        prev_gain = avg_gain;
-        prev_loss = avg_loss;
-
-        if (avg_loss == 0.0) {
-            return 100.0;
-        }
-
-        double rs = avg_gain / avg_loss;
-        double rsi = 100.0 - (100.0 / (1.0 + rs));
-        return rsi;
+        if (prev_loss == 0.0) return 100.0;
+        double rs = prev_gain / prev_loss;
+        return 100.0 - (100.0 / (1.0 + rs));
     }
 };
 
@@ -118,14 +120,26 @@ extern "C" {
         
         double gain = 0.0;
         double loss = 0.0;
+        
+        // Initial average
         for (int i = 1; i <= period; ++i) {
-            double change = prices[i] - prices[i-1];
-            if (change > 0) gain += change;
-            else loss -= change;
+            double diff = prices[i] - prices[i-1];
+            if (diff > 0) gain += diff;
+            else loss -= diff;
         }
         
         double avg_gain = gain / period;
         double avg_loss = loss / period;
+        
+        // Wilder's Smoothing for the rest of the series
+        for (int i = period + 1; i < length; ++i) {
+            double diff = prices[i] - prices[i-1];
+            double current_gain = std::max(0.0, diff);
+            double current_loss = std::max(0.0, -diff);
+            
+            avg_gain = (avg_gain * (period - 1) + current_gain) / period;
+            avg_loss = (avg_loss * (period - 1) + current_loss) / period;
+        }
         
         if (avg_loss == 0.0) return 100.0;
         double rs = avg_gain / avg_loss;

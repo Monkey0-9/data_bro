@@ -11,3 +11,4 @@ redis==5.0.1
 opentelemetry-api==1.22.0
 opentelemetry-sdk==1.22.0
 opentelemetry-exporter-prometheus==1.12.0
+argon2-cffi==23.1.0

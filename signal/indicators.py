@@ -77,7 +77,7 @@ async def push_price(symbol: str, price: float) -> None:
 
 async def momentum_signal(symbol: str) -> tuple[Literal["BUY", "SELL", "HOLD"], float]:
     """Compute RSI-based momentum signal using TA-Lib."""
-    df = await _get_ticks(symbol, limit=50)
+    df = await _get_ticks(symbol, limit=250)
     if len(df) < 14:
         return "HOLD", 0.5
 

@@ -151,9 +151,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ctrl_c = signal::ctrl_c();
     tokio::pin!(ctrl_c);
 
+    let alpaca_key = std::env::var("ALPACA_API_KEY").ok();
+    let alpaca_secret = std::env::var("ALPACA_SECRET_KEY").ok();
+    let use_alpaca = alpaca_key.is_some() && alpaca_secret.is_some();
+
     let (tx, mut rx) = mpsc::channel::<Tick>(1000);
 
     if use_alpaca {
+        let key = alpaca_key.unwrap();
+        let secret = alpaca_secret.unwrap();
         info!("Alpaca API keys found. Connecting to wss://stream.data.alpaca.markets/v2/iex");
         let tx_clone = tx.clone();
         tokio::spawn(async move {
@@ -165,8 +171,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // Auth
                     let auth_msg = serde_json::json!({
                         "action": "auth",
-                        "key": alpaca_key,
-                        "secret": alpaca_secret
+                        "key": key,
+                        "secret": secret
                     });
                     if let Err(e) = ws_stream.send(WsMessage::Text(auth_msg.to_string())).await {
                         error!("Failed to send Alpaca auth: {}", e);

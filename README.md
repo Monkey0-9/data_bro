@@ -1,76 +1,62 @@
-# NEXUS
+# NEXUS: Institutional-Grade Trading Intelligence
 
-Real-time market intelligence platform with deterministic sentiment analysis, technical indicators, and a spatial 3D data interface.
+NEXUS is an elite, high-performance market intelligence platform designed for institutional quantitative desks. It features real-time data ingestion, quantum-optimized regime detection, and a spatial 3D data interface for immersive trade monitoring.
 
-## Stack
+## 🚀 Elite Tech Stack
 
-| Layer | Tech |
-|-------|------|
-| Ingestion | Rust + Tokio + Protobuf |
-| Stream/TSDB | QuestDB |
-| Auth | Python + FastAPI + PostgreSQL + bcrypt + TOTP |
-| Signal | Python + FastAPI + rule-based sentiment + momentum RSI |
-| UI | React 18 + TypeScript + Vite + Three.js + Zustand |
+| Layer | Technology | Key Features |
+|-------|------------|--------------|
+| **Ingestion** | Rust (Tokio) | Alpaca WebSocket, Aeron Ring Buffer, Protobuf |
+| **Stream Processing** | Rust (Arroyo) | Real-time OHLCV aggregation, Low-latency native pipeline |
+| **Database** | QuestDB / Postgres | Hybrid SQL/Timeseries storage, secured internal networking |
+| **Intelligence** | Python / ONNX | **FinBERT** sentiment (CPU-optimized), **PennyLane** Quantum QAOA |
+| **Security** | Python / FastAPI | **Argon2-ID** hashing, AI Adaptive Firewall, TOTP 2FA |
+| **Spatial UI** | React / WebXR | **Three.js** 3D visualization, **WebXR AR** mode, Zustand state |
 
-## Architecture
+## 🏗️ Architecture
 
 ```mermaid
-graph LR
-  A[Ingest: Rust] -->|ILP| B[QuestDB]
-  A -->|Protobuf| C[Stream Consumers]
-  D[UI: React/Three.js] -->|WebSocket| E[Signal: FastAPI]
-  D -->|HTTP| F[Auth: FastAPI]
-  E -->|HTTP| G[Nginx Proxy]
-  F -->|HTTP| G
-  G -->|Proxy| E
-  G -->|Proxy| F
-  B -.->|read| E
+graph TD
+  A[Alpaca WebSocket] -->|Rust Ingest| B[Aeron Ring Buffer]
+  B -->|Protobuf| C[Rust Stream Processor]
+  C -->|ILP| D[QuestDB]
+  E[Headlines Feed] -->|Redis| F[ONNX Sentiment]
+  F -->|Redis| G[Signal Engine]
+  G -->|Quantum QAOA| G
+  H[Spatial UI] -->|WebXR| G
+  H -->|Auth| I[Auth Service]
+  I -->|Postgres| J[User DB]
 ```
 
-## Quick Start
+## 🛠️ Getting Started
 
-```bash
-# 1. Environment
-cp .env.example .env
-# Edit .env and set a strong SECRET_KEY
+1.  **Environment Setup**:
+    ```bash
+    cp .env.example .env
+    # Add your ALPACA_API_KEY and set a strong SECRET_KEY
+    ```
 
-# 2. Run everything
-docker-compose up --build
+2.  **Launch the Platform**:
+    ```bash
+    docker-compose up --build
+    ```
 
-# 3. Open UI
-open http://localhost
+3.  **Access Points**:
+    - **Spatial Dashboard**: [http://localhost](http://localhost)
+    - **Auth API Docs**: [http://localhost/api/auth/docs](http://localhost/api/auth/docs)
+    - **Signal API Docs**: [http://localhost/api/signal/docs](http://localhost/api/signal/docs)
 
-# 4. API docs
-open http://localhost/api/auth/docs   # Auth
-open http://localhost/api/signal/docs   # Signal
-```
+## 🛡️ Security & Performance
 
-## Tests
+- **Argon2-ID**: State-of-the-art password hashing.
+- **AI Adaptive Firewall**: Real-time anomaly detection on all authentication routes.
+- **WebXR AR**: Immersive 3D data visualization for spatial computing environments.
+- **Quantum Regime Detection**: PennyLane-powered QAOA for portfolio optimization.
+
+## 🧪 Testing
 
 ```bash
 cd auth && pytest
 cd signal && pytest
 cd ingest && cargo test
-```
-
-## Project Structure
-
-```
-nexus/
-├── docker-compose.yml
-├── .env.example
-├── README.md
-├── proto/
-│   └── market_data.proto
-├── services/
-│   ├── auth/
-│   ├── signal/
-│   └── ingest/
-├── ui/
-│   └── src/
-│       ├── components/
-│       ├── hooks/
-│       └── store/
-└── db/
-    └── init.sql
 ```

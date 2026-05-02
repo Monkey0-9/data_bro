@@ -120,12 +120,9 @@ def run_rsi_strategy(df: pd.DataFrame, position_size: float, rsi_period: int = 1
     if len(df) < rsi_period:
         return []
 
-    # Calculate RSI
-    delta = df['price'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=rsi_period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=rsi_period).mean()
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
+    # Calculate accurate RSI using pandas_ta (Wilder's Smoothing)
+    import pandas_ta as ta
+    rsi = ta.rsi(df['price'], length=rsi_period)
 
     trades = []
     position = 0

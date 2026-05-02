@@ -1,2 +1,0 @@
-"# NEXUS — Roadmap\n\n**Milestone 1: V1 Thin Slice — CME Futures Intelligence Platform**\n\nGoal: Ship a functional end-to-end trading intelligence platform for CME ES/NQ futures — from raw tick ingestion through RL signal generation to a spatial 3D 
-<truncated 10364 bytes>

@@ -40,14 +40,39 @@ async fn main() {
 
     info!("Subscribed to Aeron stream {} on {}", stream_id, channel);
 
+    let quest_host = std::env::var("QUESTDB_HOST").unwrap_or_else(|_| "questdb".to_string());
+    let quest_port = std::env::var("QUESTDB_ILP_PORT").unwrap_or_else(|_| "9009".to_string());
+    let quest_addr = format!("{}:{}", quest_host, quest_port);
+
+    let mut quest_stream = match tokio::net::TcpStream::connect(&quest_addr).await {
+        Ok(s) => {
+            info!("Connected to QuestDB ILP on {}", quest_addr);
+            Some(s)
+        }
+        Err(e) => {
+            error!("Failed to connect to QuestDB: {}", e);
+            None
+        }
+    };
+
     let handler = |buffer: &aeron_rs::concurrent::atomic_buffer::AtomicBuffer, _header: &aeron_rs::aeron::Header| {
         let data = buffer.as_slice();
         match market_data::MarketEvent::decode(data) {
             Ok(event) => {
-                // Arroyo Windowing Logic: Aggregate ticks into 1m OHLCV bars
                 info!("Processing event for {}: price={:.2}", event.symbol, event.price);
-                // In a real Arroyo worker, we would use the DataStream API here:
-                // stream.window(Window::tumbling(Duration::from_secs(60))).aggregate(OHLCVAggregator{})
+                
+                // Sink to QuestDB via ILP
+                if let Some(ref mut s) = quest_stream {
+                    let line = format!("ticks,symbol={} price={},quantity={} {}\n", 
+                        event.symbol, event.price, event.quantity, 
+                        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+                    );
+                    // Using blocking write in the handler for now (handler is not async)
+                    // In production, use a non-blocking queue.
+                    use std::io::Write;
+                    let mut stream_ref = s.std().expect("Failed to get std stream");
+                    let _ = stream_ref.write_all(line.as_bytes());
+                }
             }
             Err(e) => error!("Failed to decode market event: {:?}", e),
         }

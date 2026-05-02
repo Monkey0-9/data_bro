@@ -23,8 +23,11 @@ from slowapi.util import get_remote_address
 from indicators import momentum_signal, push_price
 from sentiment import score as sentiment_score
 from marl_engine import MARLEngine
+from quantum_optimizer import QuantumRegimeOptimizer
 
 marl_engine = MARLEngine()
+quantum_optimizer = QuantumRegimeOptimizer()
+latest_sentiment = defaultdict(lambda: 0.0)
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 SECRET_KEY = os.environ.get("SECRET_KEY")
@@ -63,10 +66,32 @@ async def lifespan(app: FastAPI):
     global redis_client
     logger.info("Signal engine starting up")
     redis_client = redis.from_url(REDIS_URL)
+    # Start background consumer for sentiment scores
+    asyncio.create_task(consume_sentiment_scores())
     yield
     if redis_client:
         await redis_client.close()
     logger.info("Signal engine shutting down")
+
+async def consume_sentiment_scores():
+    """Background task to poll sentiment scores from Redis."""
+    logger.info("Starting sentiment score consumer...")
+    while True:
+        try:
+            if redis_client:
+                # Poll sentiment_scores stream
+                messages = await redis_client.xread({"sentiment_scores": "0"}, count=10, block=1000)
+                if messages:
+                    for stream, msgs in messages:
+                        for msg_id, data in msgs:
+                            headline_id = data.get(b"id", b"").decode("utf-8")
+                            score = float(data.get(b"score", b"0.0").decode("utf-8"))
+                            # Store in a global latest_sentiment map or per-symbol
+                            # For v1, we use a global score
+                            latest_sentiment["global"] = score
+        except Exception as e:
+            logger.error(f"Sentiment consumer error: {e}")
+            await asyncio.sleep(1)
 
 
 app = FastAPI(
@@ -103,6 +128,7 @@ class SignalResponse(BaseModel):
     confidence: float
     suggested_action: str
     equilibrium_score: float = 0.0
+    quantum_regime_score: float = 0.0
     agent_actions: dict = {}
 
 
@@ -127,7 +153,8 @@ async def log_requests(request, call_next):
 async def predict_signal(state: MarketState):
     await push_price(state.symbol, state.price)
 
-    sentiment = sentiment_score(state.news_headline)
+    # Use real-time sentiment from Redis if available, else fallback to NLP
+    sentiment = latest_sentiment.get("global", sentiment_score(state.news_headline))
     signal, confidence = await momentum_signal(state.symbol)
 
     if signal == "BUY" and sentiment > 0.2:
@@ -141,6 +168,9 @@ async def predict_signal(state: MarketState):
     dummy_market_state = [state.price] * 64 # Simplified state representation for v1
     marl_prediction = marl_engine.predict_swarm_outcome(dummy_market_state)
 
+    # Quantum Regime Optimization
+    quantum_regime = quantum_optimizer.optimize_regime(np.eye(4))
+
     result = {
         "symbol": state.symbol,
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -151,6 +181,7 @@ async def predict_signal(state: MarketState):
         "confidence": round(confidence, 4),
         "suggested_action": action,
         "equilibrium_score": round(marl_prediction["equilibrium_score"], 4),
+        "quantum_regime_score": round(quantum_regime, 4),
         "agent_actions": {k: v.tolist() for k, v in marl_prediction["agent_actions"].items()},
     }
 

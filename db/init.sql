@@ -26,4 +26,5 @@ CREATE TABLE IF NOT EXISTS ohlcv (
     volume BIGINT
 );
 
-SELECT create_hypertable('ohlcv', 'time', if_not_exists => TRUE);
+-- Hypertable creation removed for standard Postgres compatibility
+-- SELECT create_hypertable('ohlcv', 'time', if_not_exists => TRUE);

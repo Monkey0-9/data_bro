@@ -4,3 +4,4 @@ pydantic==2.6.4
 asyncpg==0.29.0
 pandas==2.2.0
 slowapi==0.1.9
+PyJWT==2.8.0

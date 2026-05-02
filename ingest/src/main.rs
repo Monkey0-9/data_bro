@@ -26,6 +26,10 @@ use tracing::{error, info, warn};
 use backoff::ExponentialBackoff;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use aeron_rs::aeron::Aeron;
+use aeron_rs::context::Context;
+use aeron_rs::publication::Publication;
+use aeron_rs::utils::types::Index;
 
 #[derive(Debug, Clone)]
 struct Tick {
@@ -104,6 +108,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut idx = 0;
     let mut seq_num: u64 = 1;
 
+    // Aeron initialization
+    let mut aeron_context = Context::new();
+    aeron_context.set_aeron_dir(std::env::var("AERON_DIR").unwrap_or_else(|_| "/tmp/aeron".to_string()));
+    let mut aeron = Aeron::new(aeron_context).expect("Failed to initialize Aeron");
+    
+    let channel = std::env::var("AERON_CHANNEL").unwrap_or_else(|_| "aeron:udp?endpoint=localhost:40123".to_string());
+    let stream_id: Index = std::env::var("AERON_STREAM_ID").unwrap_or_else(|_| "10".to_string()).parse().unwrap_or(10);
+    
+    let publication = aeron.add_publication(channel.clone(), stream_id)
+        .expect("Failed to add Aeron publication");
+
+    info!("Aeron Publication created on {} (stream_id={})", channel, stream_id);
+
     // Graceful shutdown signal
     let ctrl_c = signal::ctrl_c();
     tokio::pin!(ctrl_c);
@@ -135,59 +152,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     event_type: EventType::Trade as i32,
                     price: tick.price,
                     quantity: tick.quantity,
+                    fhe_state: fhe_state.clone(),
                 };
 
-                // Connect to QuestDB with exponential backoff if not connected
-                if stream.is_none() {
-                    let mut backoff = ExponentialBackoff::default();
-                    let mut attempt = 0;
-                    loop {
-                        match TcpStream::connect((quest_host.as_str(), quest_port)).await {
-                            Ok(s) => {
-                                info!("Connected to QuestDB ILP at {}:{}", quest_host, quest_port);
-                                stream = Some(s);
-                                break;
-                            }
-                            Err(e) => {
-                                attempt += 1;
-                                let delay = backoff.next_backoff().unwrap_or(Duration::from_secs(60));
-                                warn!("QuestDB unavailable ({}:{}) - {}. Retry {} in {:?}", quest_host, quest_port, e, attempt, delay);
-                                tokio::time::sleep(delay).await;
-                            }
+                // Protobuf serialization
+                let mut buf = Vec::with_capacity(128);
+                event.encode(&mut buf).expect("Failed to encode MarketEvent");
+
+                // Publish to Aeron
+                let buffer = aeron_rs::concurrent::atomic_buffer::AtomicBuffer::from_slice(&buf);
+                match publication.offer(buffer, 0, buf.len() as i32, None) {
+                    Ok(pos) => {
+                        if pos > 0 {
+                            info!(
+                                "[seq={}] {} @ {:.2} qty={} | Protobuf: {} bytes | Aeron pos={}",
+                                seq_num, tick.symbol, tick.price, tick.quantity, buf.len(), pos
+                            );
+                        } else {
+                            warn!("Aeron offer back-pressured: {}", pos);
                         }
                     }
+                    Err(e) => error!("Aeron offer failed: {:?}", e),
                 }
-
-                if let Some(ref mut s) = stream {
-                    if let Err(e) = send_ilp(s, "ticks", &event.symbol, event.price, event.quantity, now, &fhe_state).await {
-                        error!("ILP send failed: {}. Reconnecting...", e);
-                        stream = None;
-                        continue;
-                    }
-                }
-
-                // Zero-copy serialization with FlatBuffers
-                let mut builder = FlatBufferBuilder::with_capacity(1024);
-                let symbol_off = builder.create_string(&tick.symbol);
-                let fhe_off = builder.create_string(&fhe_state);
-                
-                let market_event_fb = fb::MarketEvent::create(&mut builder, &fb::MarketEventArgs {
-                    symbol: Some(symbol_off),
-                    exchange_timestamp: now.saturating_sub(5_000_000) as i64,
-                    ingestion_timestamp: now as i64,
-                    event_type: fb::EventType::TRADE,
-                    price: tick.price,
-                    quantity: tick.quantity,
-                    fhe_state: Some(fhe_off),
-                    quantum_signal_score: 0.0,
-                });
-                builder.finish(market_event_fb, None);
-                let encoded = builder.finished_data();
-
-                info!(
-                    "[seq={}] {} @ {:.2} qty={} | FB zero-copy: {} bytes | ts={}",
-                    seq_num, tick.symbol, tick.price, tick.quantity, encoded.len(), now
-                );
 
                 seq_num = seq_num.wrapping_add(1);
             }

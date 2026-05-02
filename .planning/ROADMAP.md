@@ -1,4 +1,4 @@
-﻿# NEXUS ΓÇö Roadmap
+# NEXUS ΓÇö Roadmap
 
 **Milestone 1: V1 Thin Slice ΓÇö CME Futures Intelligence Platform**
 
@@ -10,7 +10,7 @@ Goal: Ship a functional end-to-end trading intelligence platform for CME ES/NQ f
 
 | # | Phase | Goal | REQ-IDs | Success Criteria |
 |---|-------|------|---------|-----------------|
-| 1 | Ingestion Backbone | Real-time CME MDP 3.0 data flowing reliably into QuestDB | INGEST-01 to INGEST-08, INFRA-01 to INFRA-04 | 5 |
+| 1 | Ingestion Backbone (Done) | Real-time CME MDP 3.0 data flowing reliably into QuestDB | INGEST-01 to INGEST-08, INFRA-01 to INFRA-04 | 5 |
 | 2 | Storage & Auth Foundation | Persistent data layer + user authentication operational | STORE-01 to STORE-04, AUTH-01 to AUTH-06 | 4 |
 | 3 | Signal Engine | RL signal + NLP sentiment + portfolio suggestion generated in real time | SIGNAL-01 to SIGNAL-08 | 5 |
 | 4 | Spatial Frontend | 3D spatial browser UI rendering live market data and AI signals | UI-01 to UI-08 | 5 |

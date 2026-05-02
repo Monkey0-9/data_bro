@@ -1,5 +1,6 @@
 package com.nexus.stream;
 
+import com.nexus.stream.proto.MarketDataProto;
 import io.aeron.Aeron;
 import io.aeron.Subscription;
 import io.aeron.logbuffer.FragmentHandler;
@@ -21,6 +22,7 @@ public class IngestionJob {
         public long ingestionTimestamp;
         public double price;
         public int quantity;
+        public String fheState;
 
         public MarketEvent() {}
     }
@@ -43,27 +45,25 @@ public class IngestionJob {
             // Idle strategy for polling
             IdleStrategy idleStrategy = new SleepingIdleStrategy();
 
-            // Fragment handler for zero-copy buffer processing
+            // Fragment handler for Protobuf decoding
             FragmentHandler handler = (buffer, offset, length, header) -> {
-                // Zero-copy read from DirectBuffer
-                int symbolLength = buffer.getInt(offset);
-                byte[] symbolBytes = new byte[symbolLength];
-                buffer.getBytes(offset + 4, symbolBytes);
-                String symbol = new String(symbolBytes);
+                try {
+                    byte[] data = new byte[length];
+                    buffer.getBytes(offset, data);
+                    MarketDataProto.MarketEvent protoEvent = MarketDataProto.MarketEvent.parseFrom(data);
 
-                long exchangeTimestamp = buffer.getLong(offset + 4 + symbolLength);
-                long ingestionTimestamp = buffer.getLong(offset + 12 + symbolLength);
-                double price = buffer.getDouble(offset + 20 + symbolLength);
-                int quantity = buffer.getInt(offset + 28 + symbolLength);
+                    MarketEvent event = new MarketEvent();
+                    event.symbol = protoEvent.getSymbol();
+                    event.exchangeTimestamp = protoEvent.getExchangeTimestamp();
+                    event.ingestionTimestamp = protoEvent.getIngestionTimestamp();
+                    event.price = protoEvent.getPrice();
+                    event.quantity = protoEvent.getQuantity();
+                    event.fheState = protoEvent.getFheState();
 
-                MarketEvent event = new MarketEvent();
-                event.symbol = symbol;
-                event.exchangeTimestamp = exchangeTimestamp;
-                event.ingestionTimestamp = ingestionTimestamp;
-                event.price = price;
-                event.quantity = quantity;
-
-                ctx.collectWithTimestamp(event, event.exchangeTimestamp);
+                    ctx.collectWithTimestamp(event, event.exchangeTimestamp);
+                } catch (Exception e) {
+                    System.err.println("Failed to decode Protobuf: " + e.getMessage());
+                }
             };
 
             while (isRunning) {
@@ -103,9 +103,10 @@ public class IngestionJob {
                       .symbol("symbol", event.symbol)
                       .doubleColumn("price", event.price)
                       .longColumn("quantity", event.quantity)
-                      .at(event.exchangeTimestamp * 1000000); // Nanoseconds
+                      .stringColumn("fhe_state", event.fheState)
+                      .at(event.exchangeTimestamp * 1000); // Microseconds for QuestDB
             }
-            return "Wrote " + event.symbol + " @ " + event.price + " to QuestDB (zero-copy)";
+            return "Wrote " + event.symbol + " @ " + event.price + " (FHE: " + (event.fheState.length() > 10 ? "active" : "none") + ") to QuestDB";
         }).print();
 
         env.execute("Nexus Ingestion Job");

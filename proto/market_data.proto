@@ -18,4 +18,5 @@ message MarketEvent {
   EventType event_type = 4;
   double price = 5;
   int32 quantity = 6;
+  string fhe_state = 7;
 }

@@ -1,30 +1,32 @@
-# Phase Plan: Ingestion Backbone (01)
+# Phase Plan: Ingestion Backbone (01) - Elite Transition
 
-The goal of this phase is to establish the high-performance data ingestion pipeline using Rust, Aeron, and Apache Flink.
+The goal of this phase is to establish the high-performance, institutional-grade data ingestion pipeline using Rust, Aeron, and Apache Flink with SBE/FlatBuffers.
 
 ## 🎯 Objectives
-- [ ] Connect Rust `ingest` service to Aeron for low-latency distribution
-- [ ] Validate Flink `stream` job consuming from Aeron using zero-copy `DirectBuffer`
-- [ ] Ensure tick data reaches QuestDB with < 1ms end-to-end latency
-- [ ] Establish initial Prometheus/OpenTelemetry observability for the hot path
+- [ ] Implement Rust `ingest` service publishing to Aeron using zero-copy serialization.
+- [ ] Connect Apache Flink `stream` job to Aeron using a custom source.
+- [ ] Implement Fully Homomorphic Encryption (FHE) hooks for price data.
+- [ ] Verify < 1ms P99 latency from ingestion to QuestDB.
 
 ## 🛠️ Tasks
 
-### Wave 1: Ingestion Plumbing
-- [ ] **Task 1**: Update `ingest/main.rs` to publish Protobuf-encoded `MarketEvent` to Aeron channel
-- [ ] **Task 2**: Fix `IngestionJob.java` to correctly deserialize the Protobuf payload (currently has manual byte-offset reading which might mismatch `prost` encoding)
-- [ ] **Task 3**: Create `docker-compose.yml` entries for Aeron Media Driver (required for the services to communicate)
+### Wave 1: High-Performance Plumbing
+- [ ] **Task 1**: Add `aeron-rs` and `flatbuffers` dependencies to `ingest/Cargo.toml`.
+- [ ] **Task 2**: Refactor `ingest/src/main.rs` to publish to Aeron channel instead of direct QuestDB ILP.
+- [ ] **Task 3**: Update `docker-compose.yml` to include an Aeron Media Driver container.
+- [ ] **Task 4**: Implement SBE/FlatBuffers decoding in the Flink `IngestionJob.java`.
 
-### Wave 2: Persistence & Verification
-- [ ] **Task 4**: Verify QuestDB table schema matches the ILP fields sent by Flink
-- [ ] **Task 5**: Implement a latency-tracking metric that compares `exchange_timestamp` vs `questdb_timestamp`
+### Wave 2: Security & Persistence
+- [ ] **Task 5**: Integrate `fhe.rs` into the ingestion hot-path to encrypt sensitive tick data before publishing to the bus.
+- [ ] **Task 6**: Ensure QuestDB ILP sink in Flink is optimized for high-throughput (batching).
+- [ ] **Task 7**: Implement a latency benchmark script using `hdrhistogram`.
 
 ## 🧪 Verification Plan (UAT)
-- [ ] Run `ingest` with 1,000 TPS and verify QuestDB row count increases accordingly
-- [ ] Verify `nexus-ui` shows live tick updates coming from the `signal` engine's WebSocket
-- [ ] Check Jaeger for distributed traces covering the Ingest -> Flink jump
+- [ ] Run `ingest` -> Aeron -> Flink -> QuestDB pipeline and verify data integrity.
+- [ ] Check QuestDB for encrypted `fhe_state` column.
+- [ ] Benchmark 100k msg/sec and verify < 1ms P99 latency.
 
 ## 🔗 References
-- [market_data.proto](../../../proto/market_data.proto)
-- [ingest/main.rs](../../../ingest/src/main.rs)
+- [PROJECT.md](../../PROJECT.md)
+- [ingest/src/main.rs](../../../ingest/src/main.rs)
 - [IngestionJob.java](../../../stream/src/main/java/com/nexus/stream/IngestionJob.java)

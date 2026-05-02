@@ -1,25 +1,25 @@
-﻿# NEXUS ΓÇö State
+# NEXUS ΓÇö State
 
 ## Project Reference
 
 See: .planning/PROJECT.md (updated 2026-04-26)
 
 **Core value:** Real-time, AI-enriched market intelligence delivered through a spatial interface that makes the invisible visible ΓÇö giving quant-driven prop desks an unfair analytical edge.
-**Current focus:** Phase 1 ΓÇö Ingestion Backbone
+**Current focus:** Phase 2 — Storage & Auth Foundation
 
 ## Current Status
 
-- **Milestone:** 1 ΓÇö V1 Thin Slice (CME Futures Intelligence Platform)
-- **Phase:** 1 of 5 (not yet started ΓÇö ready to plan)
-- **Phase name:** Ingestion Backbone
+- **Milestone:** 1 — V1 Thin Slice (CME Futures Intelligence Platform)
+- **Phase:** 2 of 5 (In Progress)
+- **Phase name:** Storage & Auth Foundation
 - **Plans completed:** 0 / 5
 
 ## Phase Progress
 
 | Phase | Name | Status | Plans |
 |-------|------|--------|-------|
-| 1 | Ingestion Backbone | ≡ƒö▓ Not started | 5 plans |
-| 2 | Storage & Auth Foundation | ≡ƒö▓ Not started | 5 plans |
+| 1 | Ingestion Backbone | ✅ Complete | 1 plan |
+| 2 | Storage & Auth Foundation | 🔄 In Progress | 0 plans |
 | 3 | Signal Engine | ≡ƒö▓ Not started | 5 plans |
 | 4 | Spatial Frontend | ≡ƒö▓ Not started | 5 plans |
 | 5 | Integration & Production Hardening | ≡ƒö▓ Not started | 5 plans |

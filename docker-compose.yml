@@ -22,6 +22,18 @@ services:
     networks:
       - nexus
 
+  aeron-md:
+    image: real-logic/aeron-all:1.44.1
+    ports:
+      - "40123:40123/udp"
+    environment:
+      - AERON_DIR=/dev/shm/aeron
+    volumes:
+      - aeron_shm:/dev/shm
+    restart: unless-stopped
+    networks:
+      - nexus
+
   redis:
     image: redis:7-alpine
     ports:
@@ -302,6 +314,12 @@ services:
 volumes:
   questdb_data:
   postgres_data:
+  aeron_shm:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "size=256m"
 
 networks:
   nexus:

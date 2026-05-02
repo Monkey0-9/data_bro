@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 flatbuffers = "23.5.26"
+aeron-rs = "0.1.0"
 hex = "0.4"
 prost = "0.12"
 prost-types = "0.12"

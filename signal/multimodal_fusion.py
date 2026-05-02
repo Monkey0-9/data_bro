@@ -2,16 +2,17 @@ import torch
 import torch.nn as nn
 
 # NEXUS Temporal Fusion Transformer (TFT) for Multimodal Data Fusion
-# Aligns "Soft Data" (Satellite, Sentiment) with "Hard Data" (Tick Prices)
+# Aligns "Soft Data" (Sentinel-2 Satellite, AIS Shipping, Social Sentiment) with "Hard Data" (Tick Prices)
 
 class MultimodalFusionTransformer(nn.Module):
     def __init__(self):
         super().__init__()
-        # Input 1: Hard Data (Price Action) - High Frequency
+        # Input 1: Hard Data (CME Tick Action) - High Frequency (1ms resolution)
         self.hard_data_encoder = nn.LSTM(input_size=10, hidden_size=64, num_layers=2, batch_first=True)
         
-        # Input 2: Soft Data (Sentiment/Satellite) - Low Frequency
-        self.soft_data_encoder = nn.Linear(5, 64)
+        # Input 2: Alternative "Soft" Data (Sentinel-2 Imagery, AIS Shipping Feeds)
+        # Features: Port Traffic, Suez Canal Throughput, Refinery Heat Maps
+        self.soft_data_encoder = nn.Linear(10, 64)
         
         # Temporal Fusion Layer
         self.fusion_layer = nn.MultiheadAttention(embed_dim=64, num_heads=4)
@@ -32,8 +33,19 @@ class MultimodalFusionTransformer(nn.Module):
         
         return self.output_head(fused.squeeze(0))
 
+    def detect_suez_bottleneck(self, ais_data: torch.Tensor) -> bool:
+        # Specialized detection for energy sector volatility triggers
+        # AIS Data features: [ship_count, avg_speed, queue_length, draught, weather]
+        bottleneck_score = torch.sigmoid(self.soft_data_encoder(ais_data)).mean()
+        return bottleneck_score.item() > 0.85
+
 if __name__ == "__main__":
     model = MultimodalFusionTransformer()
     h = torch.randn(1, 20, 10) # 20 ticks
-    s = torch.randn(1, 5)      # 5 sentiment/satellite features
+    s = torch.randn(1, 10)     # 10 alt-data features (Sentinel-2 + AIS)
     print(f"Fused Regime Score: {model(h, s).item()}")
+    
+    # Specific Energy Sector Trigger Example
+    ais_input = torch.randn(1, 10)
+    if model.detect_suez_bottleneck(ais_input):
+        print("CRITICAL: Suez Canal Bottleneck Detected - Immediate Energy Sector Highlighting Required")

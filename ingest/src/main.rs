@@ -23,6 +23,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::signal;
 use tokio::time::{interval, Duration};
+use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 use backoff::ExponentialBackoff;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
@@ -150,25 +151,92 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ctrl_c = signal::ctrl_c();
     tokio::pin!(ctrl_c);
 
-    let alpaca_key = std::env::var("ALPACA_API_KEY").unwrap_or_default();
-    let alpaca_secret = std::env::var("ALPACA_SECRET_KEY").unwrap_or_default();
-    let use_alpaca = !alpaca_key.is_empty() && !alpaca_secret.is_empty();
+    let (tx, mut rx) = mpsc::channel::<Tick>(1000);
 
     if use_alpaca {
-        info!("Alpaca API keys found. Proceeding with real-time WebSocket connection (Not fully blocking yet in scaffold)...");
-        // Scaffold: The actual Alpaca connection would happen here.
-        // let url = "wss://stream.data.alpaca.markets/v2/iex";
-        // let (mut ws_stream, _) = connect_async(url).await.expect("Failed to connect");
-        // ... auth and subscribe logic ...
+        info!("Alpaca API keys found. Connecting to wss://stream.data.alpaca.markets/v2/iex");
+        let tx_clone = tx.clone();
+        tokio::spawn(async move {
+            let url = "wss://stream.data.alpaca.markets/v2/iex";
+            match connect_async(url).await {
+                Ok((mut ws_stream, _)) => {
+                    info!("Connected to Alpaca WebSocket");
+                    
+                    // Auth
+                    let auth_msg = serde_json::json!({
+                        "action": "auth",
+                        "key": alpaca_key,
+                        "secret": alpaca_secret
+                    });
+                    if let Err(e) = ws_stream.send(WsMessage::Text(auth_msg.to_string())).await {
+                        error!("Failed to send Alpaca auth: {}", e);
+                        return;
+                    }
+                    
+                    // Subscribe
+                    let sub_msg = serde_json::json!({
+                        "action": "subscribe",
+                        "trades": ["SPY", "QQQ"]
+                    });
+                    if let Err(e) = ws_stream.send(WsMessage::Text(sub_msg.to_string())).await {
+                        error!("Failed to send Alpaca subscribe: {}", e);
+                        return;
+                    }
+
+                    while let Some(msg) = ws_stream.next().await {
+                        match msg {
+                            Ok(WsMessage::Text(text)) => {
+                                if let Ok(parsed) = serde_json::from_str::<Value>(&text) {
+                                    if let Some(arr) = parsed.as_array() {
+                                        for item in arr {
+                                            if item["T"] == "t" { // Trade message
+                                                if let (Some(sym), Some(price), Some(size)) = (
+                                                    item["S"].as_str(),
+                                                    item["p"].as_f64(),
+                                                    item["s"].as_i64()
+                                                ) {
+                                                    let _ = tx_clone.send(Tick {
+                                                        symbol: sym.to_string(),
+                                                        price,
+                                                        quantity: size as i32,
+                                                    }).await;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                error!("Alpaca WS error: {}", e);
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to connect to Alpaca: {}", e);
+                }
+            }
+        });
     } else {
         warn!("Alpaca API keys missing. Falling back to synthetic offline offline generation (GBM)");
+        let tx_clone = tx.clone();
+        tokio::spawn(async move {
+            let mut ticker = interval(Duration::from_millis(100));
+            let mut idx = 0;
+            loop {
+                ticker.tick().await;
+                let tick = if idx % 2 == 0 { es_state.next_tick() } else { nq_state.next_tick() };
+                let _ = tx_clone.send(tick).await;
+                idx += 1;
+            }
+        });
     }
 
     loop {
         tokio::select! {
-            _ = ticker.tick() => {
-                let mut tick = if idx % 2 == 0 { es_state.next_tick() } else { nq_state.next_tick() };
-                idx += 1;
+            Some(mut tick) = rx.recv() => {
 
                 // Non-blocking data translation for dark pools
                 if idx % 5 == 0 {

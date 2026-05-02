@@ -221,6 +221,20 @@ services:
     networks:
       - nexus
 
+  gpu-sentiment:
+    build:
+      context: ./gpu_sentiment
+    ports:
+      - "8004:8004"
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    restart: unless-stopped
+    networks:
+      - nexus
+
   ui:
     build:
       context: ./ui

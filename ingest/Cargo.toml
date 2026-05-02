@@ -8,7 +8,7 @@ tokio = { version = "1", features = ["full"] }
 flatbuffers = "23.5.26"
 aeron-rs = "0.1.0"
 hex = "0.4"
-prost = "0.12"
+prost = "0.14"
 prost-types = "0.12"
 bytes = "1"
 rand = "0.8"

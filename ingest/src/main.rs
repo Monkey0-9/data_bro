@@ -13,7 +13,8 @@ use market_data_fb::nexus::market_data as fb;
 pub mod fhe;
 use fhe::FHEContext;
 
-use csv::ReaderBuilder;
+use rand_distr::{Normal, Distribution};
+use rand::thread_rng;
 use market_data::{EventType, MarketEvent};
 use prost::Message;
 use std::fs::File;
@@ -38,19 +39,40 @@ struct Tick {
     quantity: i32,
 }
 
-fn load_ticks(path: &str) -> Vec<Tick> {
-    let file = File::open(path).expect("Failed to open tick CSV");
-    let mut rdr = ReaderBuilder::new().from_reader(file);
-    let mut ticks = Vec::new();
+struct GBMState {
+    symbol: String,
+    price: f64,
+    mu: f64,
+    sigma: f64,
+    dt: f64,
+}
 
-    for result in rdr.records() {
-        let record = result.expect("Failed to parse CSV record");
-        let symbol = record.get(1).unwrap_or("UNKNOWN").to_string();
-        let price: f64 = record.get(2).unwrap_or("0").parse().unwrap_or(0.0);
-        let quantity: i32 = record.get(3).unwrap_or("0").parse().unwrap_or(0);
-        ticks.push(Tick { symbol, price, quantity });
+impl GBMState {
+    fn new(symbol: &str, initial_price: f64, mu: f64, sigma: f64, dt: f64) -> Self {
+        Self {
+            symbol: symbol.to_string(),
+            price: initial_price,
+            mu,
+            sigma,
+            dt,
+        }
     }
-    ticks
+
+    fn next_tick(&mut self) -> Tick {
+        let mut rng = thread_rng();
+        let normal = Normal::new(0.0, 1.0).unwrap();
+        let dw = normal.sample(&mut rng) * self.dt.sqrt();
+        
+        let drift = (self.mu - 0.5 * self.sigma * self.sigma) * self.dt;
+        let diffusion = self.sigma * dw;
+        self.price *= (drift + diffusion).exp();
+
+        Tick {
+            symbol: self.symbol.clone(),
+            price: self.price,
+            quantity: (rng.gen::<f64>() * 100.0) as i32 + 1, // Random quantity
+        }
+    }
 }
 
 async fn send_ilp(stream: &mut TcpStream, table: &str, symbol: &str, price: f64, qty: i32, ts: u64, fhe_state: &str) -> std::io::Result<()> {
@@ -90,9 +112,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Starting NEXUS Ingestion Service...");
 
-    let csv_path = std::env::var("TICKS_CSV").unwrap_or_else(|_| "data/ticks.csv".to_string());
-    let ticks = load_ticks(&csv_path);
-    info!("Loaded {} ticks from {}", ticks.len(), csv_path);
+    let mut es_state = GBMState::new("ESM6", 4500.0, 0.05, 0.2, 1.0 / 252.0 / 6.5 / 3600.0); // Synthetic ES tick
+    let mut nq_state = GBMState::new("NQZ6", 15000.0, 0.08, 0.3, 1.0 / 252.0 / 6.5 / 3600.0); // Synthetic NQ tick
+    info!("Initialized synthetic GBM data generators for ESM6 and NQZ6");
 
     let fhe_ctx = FHEContext::new();
     info!("Initialized OpenFHE CKKS Context (Ring Dim: 16384)");
@@ -128,7 +150,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     loop {
         tokio::select! {
             _ = ticker.tick() => {
-                let mut tick = ticks[idx % ticks.len()].clone();
+                let mut tick = if idx % 2 == 0 { es_state.next_tick() } else { nq_state.next_tick() };
                 idx += 1;
 
                 // Non-blocking data translation for dark pools

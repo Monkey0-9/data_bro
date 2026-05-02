@@ -8,6 +8,7 @@ export interface SignalData {
   sentiment_score: number;
   momentum_signal: string;
   confidence: number;
+  equilibrium_score: number;
   suggested_action: string;
 }
 

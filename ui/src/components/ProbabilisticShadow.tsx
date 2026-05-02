@@ -10,7 +10,7 @@ export function ProbabilisticShadow({ position }: { position: [number, number, n
     const pts = [];
     for (let i = 0; i < 50; i++) {
       // Uncertainty cone: x increases, y/z spread increases
-      const spread = i * 0.02;
+      // Uncertainty cone: x increases, y/z spread increases
       pts.push(new THREE.Vector3(i * 0.1, Math.sin(i * 0.5) * 0.2, 0));
     }
     return pts;

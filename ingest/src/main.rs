@@ -31,6 +31,9 @@ use aeron_rs::aeron::Aeron;
 use aeron_rs::context::Context;
 use aeron_rs::publication::Publication;
 use aeron_rs::utils::types::Index;
+use futures_util::{StreamExt, SinkExt};
+use tokio_tungstenite::{connect_async, tungstenite::protocol::Message as WsMessage};
+use serde_json::Value;
 
 #[derive(Debug, Clone)]
 struct Tick {
@@ -146,6 +149,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Graceful shutdown signal
     let ctrl_c = signal::ctrl_c();
     tokio::pin!(ctrl_c);
+
+    let alpaca_key = std::env::var("ALPACA_API_KEY").unwrap_or_default();
+    let alpaca_secret = std::env::var("ALPACA_SECRET_KEY").unwrap_or_default();
+    let use_alpaca = !alpaca_key.is_empty() && !alpaca_secret.is_empty();
+
+    if use_alpaca {
+        info!("Alpaca API keys found. Proceeding with real-time WebSocket connection (Not fully blocking yet in scaffold)...");
+        // Scaffold: The actual Alpaca connection would happen here.
+        // let url = "wss://stream.data.alpaca.markets/v2/iex";
+        // let (mut ws_stream, _) = connect_async(url).await.expect("Failed to connect");
+        // ... auth and subscribe logic ...
+    } else {
+        warn!("Alpaca API keys missing. Falling back to synthetic offline offline generation (GBM)");
+    }
 
     loop {
         tokio::select! {

@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 import asyncpg
 import jwt
 import pyotp
-from fastapi import FastAPI, HTTPException, Request, status
+from fastapi import FastAPI, HTTPException, Request, status, Response
 from fastapi.middleware.cors import CORSMiddleware
 from opentelemetry import trace
 from opentelemetry.exporter.prometheus import PrometheusMetricReader
@@ -100,6 +100,27 @@ class UserLogin(BaseModel):
 class RefreshTokenRequest(BaseModel):
     refresh_token: str
 
+# --- AI Adaptive Firewall ---
+# Scaffolding an AI firewall that would normally evaluate request velocity, 
+# header anomalies, and payload signatures using an ML model.
+suspicious_ips = set()
+
+@app.middleware("http")
+async def ai_firewall_middleware(request: Request, call_next):
+    client_ip = get_remote_address(request)
+    
+    # Block immediately if in known bad actors set
+    if client_ip in suspicious_ips:
+        return Response(content="Blocked by AI Adaptive Firewall", status_code=status.HTTP_403_FORBIDDEN)
+        
+    # Simulate anomaly detection (e.g. rapid unusual headers)
+    if request.headers.get("x-anomaly-test") == "true":
+        suspicious_ips.add(client_ip)
+        logger.warning(f"AI Firewall blocked anomalous IP: {client_ip}")
+        return Response(content="Anomaly detected", status_code=status.HTTP_403_FORBIDDEN)
+        
+    response = await call_next(request)
+    return response
 
 @app.middleware("http")
 async def log_requests(request, call_next):

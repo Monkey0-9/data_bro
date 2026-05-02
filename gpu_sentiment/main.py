@@ -48,9 +48,48 @@ class Headline(BaseModel):
 async def consume_redis_stream():
     """Consume headlines from Redis stream and push scores back."""
     logger.info("Starting Redis stream consumer for headlines...")
-    # Scaffold stream processing loop
+    
+    # Create consumer group if not exists
+    try:
+        if redis_client:
+            await redis_client.xgroup_create("headlines", "sentiment_group", id="$", mkstream=True)
+    except redis.ResponseError as e:
+        if "BUSYGROUP" not in str(e):
+            logger.error(f"Error creating group: {e}")
+
     while True:
-        await asyncio.sleep(1)
+        try:
+            if not redis_client:
+                await asyncio.sleep(1)
+                continue
+                
+            # Block and wait for new messages
+            messages = await redis_client.xreadgroup(
+                "sentiment_group", "consumer-1", 
+                {"headlines": ">"}, 
+                count=10, block=1000
+            )
+            
+            if messages:
+                for stream, msgs in messages:
+                    for msg_id, data in msgs:
+                        text = data.get(b"text", b"").decode("utf-8")
+                        headline_id = data.get(b"id", b"").decode("utf-8")
+                        
+                        score = model.predict(text)
+                        logger.info(f"Scored headline {headline_id}: {score}")
+                        
+                        # Publish back to a result stream
+                        await redis_client.xadd(
+                            "sentiment_scores", 
+                            {"id": headline_id, "score": str(score)}
+                        )
+                        
+                        # Acknowledge
+                        await redis_client.xack("headlines", "sentiment_group", msg_id)
+        except Exception as e:
+            logger.error(f"Error in stream consumer: {e}")
+            await asyncio.sleep(1)
 
 @app.post("/analyze")
 async def analyze_sentiment(headline: Headline):

@@ -3,8 +3,11 @@ import { OrbitControls, Stars, Sparkles, ContactShadows } from '@react-three/dre
 import { OrderBookCube } from './OrderBookCube';
 import { TDAStressMap } from './TDAStressMap';
 import { ProbabilisticShadow } from './ProbabilisticShadow';
+import { useSignalStore } from '../store/signalStore';
 
 export function SceneCanvas() {
+  const { signal } = useSignalStore();
+
   return (
     <Canvas
       camera={{ position: [0, 2, 7], fov: 50 }}
@@ -20,16 +23,26 @@ export function SceneCanvas() {
       <Stars radius={100} depth={50} count={5000} factor={4} saturation={1} fade speed={1.5} />
       <Sparkles count={200} scale={10} size={2} speed={0.4} opacity={0.5} color="#00ffcc" />
 
-      <OrderBookCube position={[-2.5, 0, 0]} color="#ff3366" label="SELL LIMIT" price={18505.25} />
-      <OrderBookCube position={[2.5, 0, 0]} color="#00ffcc" label="BUY LIMIT" price={18498.50} />
+      {signal ? (
+        <>
+          <OrderBookCube position={[-2.5, Math.sin(Date.now() / 1000) * 0.5, 0]} color="#ff3366" label="SIGNAL PRICE" price={signal.price} />
+          {signal.momentum_signal === "BUY" && (
+            <OrderBookCube position={[2.5, 0, 0]} color="#00ffcc" label="MOMENTUM" price={signal.confidence * 100} />
+          )}
+        </>
+      ) : (
+        <>
+          <OrderBookCube position={[-2.5, 0, 0]} color="#333333" label="AWAITING FEED" price={0.00} />
+          <OrderBookCube position={[2.5, 0, 0]} color="#333333" label="AWAITING FEED" price={0.00} />
+        </>
+      )}
 
       {/* TDA Stress Map visualization */}
       <TDAStressMap position={[0, -1, -5]} />
 
       {/* Probabilistic Price Shadows */}
-      <ProbabilisticShadow position={[2, 0.5, 2]} />
-      <ProbabilisticShadow position={[2, 0.2, 2.5]} />
-
+      {signal && <ProbabilisticShadow position={[signal.equilibrium_score * 5, 0.5, 2]} />}
+      
       <ContactShadows position={[0, -2.5, 0]} opacity={0.5} scale={15} blur={2.5} far={4} color="#00ffcc" />
       <OrbitControls enablePan={false} maxPolarAngle={Math.PI / 1.8} minDistance={4} maxDistance={12} />
     </Canvas>

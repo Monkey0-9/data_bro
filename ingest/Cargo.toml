@@ -25,5 +25,5 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 [build-dependencies]
-prost-build = "0.12"
+prost-build = "0.14"
 flatc-rust = "0.2"

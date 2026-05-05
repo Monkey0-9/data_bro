@@ -12,5 +12,5 @@ opentelemetry-exporter-prometheus==1.12.0
 transformers==4.38.2
 torch==2.1.2
 pennylane==0.35.1
-tenseal==0.3.14
+tenseal==0.3.16
 PyJWT==2.8.0
